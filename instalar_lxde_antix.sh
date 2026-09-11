@@ -1,71 +1,160 @@
 #!/bin/bash
 #
 # instalar_lxde_antix.sh
-# Instala y configura LXDE en antiX Linux (init runit) con:
-#   - Gestor de red gráfico (NetworkManager + nm-applet) para WiFi
-#   - Control de volumen gráfico (volumeicon + alsa-utils / pavucontrol si hay pulse)
-#   - Gestión de sesión: elogind + seatd (antiX no los trae por defecto)
-#   - PolicyKit (policykit-1 + lxpolkit) para autorizar acciones como
-#     apagar/reiniciar, montar USB, etc. desde el escritorio
-#   - Gestor de inicio de sesión gráfico (LightDM) que arranca siempre
-#     al encender, con dbus/elogind/NetworkManager habilitados en el
-#     orden correcto bajo runit
+#
+# Instala y configura LXDE en antiX Linux con:
+#   - WiFi (NetworkManager + nm-applet)
+#   - Volumen (ALSA + volumeicon)
+#   - Gestión de sesión (elogind + seatd) y PolicyKit (policykit-1/polkitd
+#     + lxpolkit)
+#   - LightDM como gestor de inicio de sesión gráfico
+#
+# antiX-26 soporta 5 init (runit, sysVinit, dinit, s6-rc, s6-66), pero
+# solo runit y sysVinit son considerados estables por el propio proyecto
+# antiX. Por eso este script:
+#   1. Habilita los servicios ÚNICAMENTE para runit y sysVinit.
+#   2. Restringe el menú de GRUB para que solo ofrezca esos dos init,
+#      usando la herramienta oficial de antiX (grub-multi-init-enabler).
+#
+# COMPORTAMIENTO SEGURO:
+#   - Registra todo en un log con fecha/hora.
+#   - Hace respaldo de cada archivo antes de modificarlo.
+#   - Pide confirmación antes de tocar GRUB (usa --yes para omitir).
+#   - Es idempotente: se puede volver a ejecutar sin duplicar cambios.
+#   - Verifica al final el estado real de cada servicio, en vez de
+#     asumir que todo funcionó.
 #
 # Uso:
 #   chmod +x instalar_lxde_antix.sh
-#   sudo ./instalar_lxde_antix.sh
+#   sudo ./instalar_lxde_antix.sh          # modo interactivo
+#   sudo ./instalar_lxde_antix.sh --yes    # sin confirmaciones
 #
-set -euo pipefail
+set -Eeuo pipefail
+IFS=$'\n\t'
 
 # ------------------------------------------------------------------
-# 0. Comprobaciones previas
+# 0. Comportamiento seguro: log, confirmaciones, manejo de errores
 # ------------------------------------------------------------------
 if [ "$(id -u)" -ne 0 ]; then
     echo "Este script debe ejecutarse como root (usa sudo)." >&2
     exit 1
 fi
 
+ASSUME_YES=0
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes) ASSUME_YES=1 ;;
+    esac
+done
+
+LOG_FILE="/var/log/instalar_lxde_antix_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+on_error() {
+    echo ""
+    echo "‼ ERROR en la línea $1 (comando: \"$2\")." >&2
+    echo "  El script se detuvo para no dejar el sistema a medio configurar." >&2
+    echo "  Revisa el detalle completo en: $LOG_FILE" >&2
+}
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
+trap 'echo "==> Log completo guardado en: $LOG_FILE"' EXIT
+
+confirm() {
+    local prompt="$1"
+    if [ "$ASSUME_YES" -eq 1 ]; then
+        return 0
+    fi
+    read -r -p "$prompt [s/N]: " resp
+    case "$resp" in
+        [sS]|[sS][iI]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+backup_file() {
+    local f="$1"
+    if [ -f "$f" ]; then
+        cp -a "$f" "${f}.bak.$(date +%Y%m%d_%H%M%S)"
+        echo "    Respaldo creado: ${f}.bak.*"
+    fi
+}
+
 REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
 REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+CURRENT_INIT=$(ps -p 1 -o comm= 2>/dev/null || echo "desconocido")
 
 echo "==> Usuario detectado: $REAL_USER (home: $REAL_HOME)"
+echo "==> Init activo en este arranque: $CURRENT_INIT"
+echo "==> Registrando toda la ejecución en: $LOG_FILE"
 
 # ------------------------------------------------------------------
-# Funciones auxiliares para manejar servicios de runit
-#
-# IMPORTANTE: antiX activa los servicios de runit enlazándolos en
-# /etc/service/ (a diferencia de Void Linux, que usa /var/service/).
-# Ese es el directorio que realmente supervisa runsvdir al arrancar.
+# Funciones para habilitar/verificar servicios SOLO en runit y
+# sysVinit (los dos init estables). Nada se hace para dinit, s6-rc
+# ni s6-66.
 # ------------------------------------------------------------------
 RUNIT_SVDIR="/etc/service"
 
 enable_runit_service() {
-    local wanted="$1"
-    local found=""
-
+    local wanted="$1" found=""
     for candidate in "$wanted" "${wanted,,}" "${wanted^}"; do
-        if [ -d "/etc/sv/$candidate" ]; then
-            found="$candidate"
-            break
-        fi
+        [ -d "/etc/sv/$candidate" ] && { found="$candidate"; break; }
     done
-
     if [ -z "$found" ]; then
-        echo "    AVISO: no se encontró /etc/sv/$wanted (ni variantes)."
+        echo "    [runit] AVISO: no se encontró /etc/sv/$wanted."
         return 1
     fi
-
     mkdir -p "$RUNIT_SVDIR"
     ln -sf "/etc/sv/$found" "$RUNIT_SVDIR/$found"
-    echo "    Servicio '$found' habilitado y enlazado en $RUNIT_SVDIR/."
-    return 0
+    echo "    [runit] '$found' habilitado en $RUNIT_SVDIR/."
 }
 
 disable_runit_service() {
     local name="$1"
     if [ -L "$RUNIT_SVDIR/$name" ]; then
         rm -f "$RUNIT_SVDIR/$name"
-        echo "    Servicio '$name' deshabilitado (enlace removido)."
+        echo "    [runit] '$name' deshabilitado."
+    fi
+}
+
+enable_sysvinit_service() {
+    local svc="$1"
+    if [ -x "/etc/init.d/$svc" ] && command -v update-rc.d >/dev/null 2>&1; then
+        # "defaults" es la única forma válida en Debian/antiX; no existe
+        # un subcomando "enable" en update-rc.d (eso es de otras distros).
+        if update-rc.d "$svc" defaults >/dev/null 2>&1; then
+            echo "    [sysvinit] '$svc' habilitado."
+        else
+            echo "    [sysvinit] AVISO: 'update-rc.d $svc defaults' falló."
+        fi
+    else
+        echo "    [sysvinit] AVISO: no se encontró /etc/init.d/$svc."
+        return 1
+    fi
+}
+
+disable_sysvinit_service() {
+    local svc="$1"
+    if [ -x "/etc/init.d/$svc" ] && command -v update-rc.d >/dev/null 2>&1; then
+        update-rc.d "$svc" remove >/dev/null 2>&1 || true
+        echo "    [sysvinit] '$svc' deshabilitado (si estaba habilitado)."
+    fi
+}
+
+verify_runit_service() {
+    local svc="$1"
+    if [ -L "$RUNIT_SVDIR/$svc" ]; then
+        echo "    [runit]    $svc -> HABILITADO ($(readlink -f "$RUNIT_SVDIR/$svc"))"
+    else
+        echo "    [runit]    $svc -> NO habilitado"
+    fi
+}
+
+verify_sysvinit_service() {
+    local svc="$1"
+    if ls /etc/rc*.d/ 2>/dev/null | grep -q "S[0-9]*${svc}$"; then
+        echo "    [sysvinit] $svc -> HABILITADO (enlaces en /etc/rcN.d/)"
+    else
+        echo "    [sysvinit] $svc -> NO habilitado"
     fi
 }
 
@@ -80,15 +169,8 @@ apt update
 # ------------------------------------------------------------------
 echo "==> Instalando LXDE..."
 apt install -y \
-    lxde-core \
-    lxde-icon-theme \
-    lxterminal \
-    lxappearance \
-    lxsession \
-    pcmanfm \
-    lxpanel \
-    openbox \
-    xorg
+    lxde-core lxde-icon-theme lxterminal lxappearance \
+    lxsession pcmanfm lxpanel openbox xorg
 
 # ------------------------------------------------------------------
 # 3. WiFi: NetworkManager + applet gráfico
@@ -98,7 +180,7 @@ apt install -y network-manager network-manager-gnome wireless-tools wpasupplican
 
 if [ -f /etc/network/interfaces ]; then
     echo "==> Ajustando /etc/network/interfaces para dejar el manejo a NetworkManager..."
-    cp /etc/network/interfaces /etc/network/interfaces.bak.$(date +%s)
+    backup_file /etc/network/interfaces
     cat > /etc/network/interfaces <<'EOF'
 auto lo
 iface lo inet loopback
@@ -110,31 +192,18 @@ fi
 # ------------------------------------------------------------------
 echo "==> Instalando herramientas de audio..."
 apt install -y alsa-utils volumeicon-alsa
-
 if command -v pulseaudio >/dev/null 2>&1 || dpkg -l | grep -q pulseaudio; then
     apt install -y pavucontrol
 fi
 
 # ------------------------------------------------------------------
 # 5. Gestión de sesión: elogind + seatd
-#
-# antiX, desde la versión 22, no trae elogind instalado por defecto.
-# Sin esto, dbus intenta activar 'org.freedesktop.login1' al iniciar
-# sesión y falla con un timeout, y LightDM no puede manejar la sesión
-# gráfica correctamente.
 # ------------------------------------------------------------------
 echo "==> Instalando elogind y dependencias de gestión de sesión..."
 apt install -y elogind libpam-elogind seatd dbus-x11
 
 # ------------------------------------------------------------------
-# 6. PolicyKit: autoriza acciones administrativas desde el escritorio
-#    (apagar/reiniciar, montar USB, cambiar configuración de red, etc.)
-#
-# El nombre del paquete cambió entre versiones de Debian: en las más
-# recientes es "polkitd", en las más antiguas "policykit-1". Se prueba
-# primero el nombre clásico y, si no existe, se usa el nuevo.
-# lxpolkit es el agente gráfico que muestra los diálogos de
-# autorización dentro de una sesión LXDE.
+# 6. PolicyKit: policykit-1 (o polkitd) + lxpolkit
 # ------------------------------------------------------------------
 echo "==> Instalando PolicyKit..."
 if ! apt install -y policykit-1 lxpolkit; then
@@ -143,16 +212,16 @@ if ! apt install -y policykit-1 lxpolkit; then
 fi
 
 # ------------------------------------------------------------------
-# 7. Gestor de inicio de sesión: LightDM (ligero, ideal para LXDE)
+# 7. LightDM
 # ------------------------------------------------------------------
 echo "==> Instalando LightDM..."
 DEBIAN_FRONTEND=noninteractive apt install -y lightdm lightdm-gtk-greeter
 
 if [ -e /etc/X11/default-display-manager ]; then
+    backup_file /etc/X11/default-display-manager
     echo "/usr/sbin/lightdm" > /etc/X11/default-display-manager
 fi
 
-# Definir LXDE como sesión por defecto en el saludo de LightDM
 mkdir -p /etc/lightdm/lightdm.conf.d
 cat > /etc/lightdm/lightdm.conf.d/50-lxde.conf <<'EOF'
 [Seat:*]
@@ -161,25 +230,59 @@ greeter-session=lightdm-gtk-greeter
 EOF
 
 # ------------------------------------------------------------------
-# 8. Habilitar servicios bajo runit para que arranquen siempre al
-#    encender el equipo. El orden importa: dbus y elogind deben
-#    quedar activos antes que lightdm, porque lightdm depende de
-#    ellos para manejar la sesión gráfica.
+# 8. Restringir el menú de GRUB a solo sysVinit y runit
+#
+# antiX incluye una herramienta oficial (grub-multi-init-enabler) para
+# esto, reconfigurable con dpkg-reconfigure. Como su formato interno de
+# configuración no es de dominio público, este script NO edita
+# grub.cfg a ciegas: usa la herramienta oficial, respalda todo antes,
+# y verifica el resultado después.
 # ------------------------------------------------------------------
-echo "==> Habilitando dbus en runit..."
+echo "==> Configurando el menú de GRUB (solo sysVinit + runit)..."
+backup_file /etc/default/grub
+if [ -f /boot/grub/grub.cfg ]; then
+    cp -a /boot/grub/grub.cfg "/boot/grub/grub.cfg.bak.$(date +%Y%m%d_%H%M%S)"
+    echo "    Respaldo creado: /boot/grub/grub.cfg.bak.*"
+fi
+
+if ! dpkg -s grub-multi-init-enabler >/dev/null 2>&1; then
+    echo "    Instalando grub-multi-init-enabler..."
+    apt install -y grub-multi-init-enabler || true
+fi
+
+if dpkg -s grub-multi-init-enabler >/dev/null 2>&1; then
+    echo "    A continuación se abre la configuración interactiva de arranque."
+    echo "    Selecciona ÚNICAMENTE 'sysVinit' y 'runit'; desmarca dinit,"
+    echo "    s6-rc y s6-66."
+    if confirm "    ¿Abrir la configuración de GRUB ahora?"; then
+        dpkg-reconfigure grub-multi-init-enabler
+        update-grub
+        echo "    Entradas de init detectadas en grub.cfg:"
+        grep -oE "init=/sbin/init-[a-zA-Z0-9._-]+" /boot/grub/grub.cfg 2>/dev/null \
+            | sort -u | sed 's/^/      /' \
+            || echo "      (no se detectaron parámetros init= explícitos; revisa el menú manualmente)"
+    else
+        echo "    Configuración de GRUB omitida por el usuario."
+        echo "    Puedes ejecutarla después con: sudo dpkg-reconfigure grub-multi-init-enabler"
+    fi
+else
+    echo "    AVISO: 'grub-multi-init-enabler' no está disponible en tus repositorios."
+    echo "    El menú de GRUB NO se modificó (no se edita a ciegas por seguridad)."
+    echo "    Si tu sistema ofrece un submenú de 'Advanced options', ahí puedes"
+    echo "    elegir manualmente sysVinit o runit en cada arranque."
+fi
+
+# ------------------------------------------------------------------
+# 9. Habilitar dbus, elogind, NetworkManager y lightdm — SOLO para
+#    runit y sysVinit, en orden (dbus/elogind antes que lightdm).
+# ------------------------------------------------------------------
+echo "==> Habilitando servicios en runit..."
 enable_runit_service "dbus" || true
-
-echo "==> Habilitando elogind en runit..."
 enable_runit_service "elogind" || true
-
-echo "==> Habilitando NetworkManager en runit..."
 enable_runit_service "NetworkManager" || true
-
 disable_runit_service "networking"
-
-echo "==> Habilitando LightDM en runit (arranque automático)..."
 if ! enable_runit_service "lightdm"; then
-    echo "    Registrando el servicio lightdm manualmente para runit..."
+    echo "    [runit] Registrando lightdm manualmente..."
     mkdir -p /etc/sv/lightdm/log
     cat > /etc/sv/lightdm/run <<'EOF'
 #!/bin/sh
@@ -187,123 +290,89 @@ exec /usr/sbin/lightdm
 EOF
     chmod +x /etc/sv/lightdm/run
     ln -sf /etc/sv/lightdm "$RUNIT_SVDIR/lightdm"
-    echo "    Servicio lightdm creado y habilitado manualmente."
+    echo "    [runit] lightdm creado y habilitado manualmente."
 fi
-
-# Deshabilitar otros gestores de sesión que puedan competir por la
-# terminal gráfica (si estuvieran instalados y habilitados)
 for OTHER_DM in sddm gdm gdm3 slim slimski xdm; do
     disable_runit_service "$OTHER_DM"
 done
+[ -L "$RUNIT_SVDIR/agetty-tty1" ] && disable_runit_service "agetty-tty1"
 
-if [ -L "$RUNIT_SVDIR/agetty-tty1" ]; then
-    disable_runit_service "agetty-tty1"
-fi
+echo "==> Habilitando servicios en sysVinit..."
+enable_sysvinit_service "dbus" || true
+enable_sysvinit_service "elogind" || true
+enable_sysvinit_service "network-manager" || enable_sysvinit_service "networking" || true
+enable_sysvinit_service "lightdm" || true
+for OTHER_DM in sddm gdm gdm3 slim xdm; do
+    disable_sysvinit_service "$OTHER_DM"
+done
 
 # ------------------------------------------------------------------
-# 9. Autostart de LXDE: nm-applet + volumeicon + lxpolkit
-#
-# lxpolkit debe iniciarse junto con la sesión para poder mostrar los
-# diálogos de autorización de PolicyKit (sin esto, aunque esté
-# instalado, no hay quien muestre la ventana de "Autenticación
-# requerida").
+# 10. Autostart de LXDE: nm-applet + volumeicon + lxpolkit
 # ------------------------------------------------------------------
-echo "==> Configurando autostart de LXDE para el usuario $REAL_USER..."
-
+echo "==> Configurando autostart de LXDE para $REAL_USER..."
 AUTOSTART_DIR="$REAL_HOME/.config/lxsession/LXDE"
 mkdir -p "$AUTOSTART_DIR"
-
 AUTOSTART_FILE="$AUTOSTART_DIR/autostart"
-
 if [ ! -f "$AUTOSTART_FILE" ] && [ -f /etc/xdg/lxsession/LXDE/autostart ]; then
     cp /etc/xdg/lxsession/LXDE/autostart "$AUTOSTART_FILE"
 fi
 touch "$AUTOSTART_FILE"
-
 for LINE in "@nm-applet" "@volumeicon" "@lxpolkit"; do
     grep -qxF "$LINE" "$AUTOSTART_FILE" || echo "$LINE" >> "$AUTOSTART_FILE"
 done
-
 chown -R "$REAL_USER":"$REAL_USER" "$REAL_HOME/.config"
 
 # ------------------------------------------------------------------
-# 10. Intentar corregir el botón de apagado/reinicio del panel
-#
-# En antiX, el diálogo clásico de LXDE (lxsession-logout) solo sabe
-# hablar con ConsoleKit y falla con elogind. antiX incluye un script
-# propio, desktop-session-exit, que detecta automáticamente el
-# backend correcto (elogind o ConsoleKit). Si existe, se intenta
-# apuntar el botón de logout del panel hacia él; si no se encuentra
-# el archivo de configuración esperado, se deja aviso para ajustarlo
-# a mano.
+# 11. Intento (best-effort) de arreglar el botón de apagado del panel
 # ------------------------------------------------------------------
 echo "==> Revisando el comando de apagado del panel de LXDE..."
 if command -v desktop-session-exit >/dev/null 2>&1; then
-    PANEL_CONFIG_CANDIDATES=(
-        "$REAL_HOME/.config/lxpanel/LXDE/panels/panel"
+    for PANEL_FILE in \
+        "$REAL_HOME/.config/lxpanel/LXDE/panels/panel" \
         "$REAL_HOME/.config/lxpanel/LXDE/config"
-    )
-    FIXED_PANEL=0
-    for PANEL_FILE in "${PANEL_CONFIG_CANDIDATES[@]}"; do
+    do
         if [ -f "$PANEL_FILE" ] && grep -q "logout" "$PANEL_FILE"; then
-            cp "$PANEL_FILE" "$PANEL_FILE.bak.$(date +%s)"
+            backup_file "$PANEL_FILE"
             sed -i -E 's/(logout(_command)?\s*=\s*).*/\1desktop-session-exit/' "$PANEL_FILE"
             chown "$REAL_USER":"$REAL_USER" "$PANEL_FILE"
-            echo "    Se actualizó '$PANEL_FILE' para usar desktop-session-exit."
-            FIXED_PANEL=1
+            echo "    Actualizado '$PANEL_FILE' para usar desktop-session-exit."
             break
         fi
     done
-    if [ "$FIXED_PANEL" -eq 0 ]; then
-        echo "    AVISO: 'desktop-session-exit' existe, pero no se encontró"
-        echo "    un archivo de configuración de panel reconocible todavía"
-        echo "    (se genera la primera vez que abras sesión en LXDE)."
-        echo "    Si el botón de apagar falla, abre después de tu primer"
-        echo "    login: ~/.config/lxpanel/LXDE/panels/panel y reemplaza"
-        echo "    el comando de logout por: desktop-session-exit"
-    fi
 else
-    echo "    'desktop-session-exit' no está disponible en este sistema."
-    echo "    Si el botón de apagar/reiniciar del panel falla con un error"
-    echo "    de ConsoleKit, usa 'sudo poweroff' / 'sudo reboot' desde una"
-    echo "    terminal mientras se investiga una alternativa."
+    echo "    'desktop-session-exit' no está disponible; si el botón de"
+    echo "    apagar falla, usa 'sudo poweroff' / 'sudo reboot' por ahora."
 fi
 
 # ------------------------------------------------------------------
-# 11. Sesión LXDE de respaldo (por si alguna vez se arranca con startx)
+# 12. Sesión LXDE de respaldo + grupos necesarios
 # ------------------------------------------------------------------
 XSESSION_RC="$REAL_HOME/.xsessionrc"
 if [ ! -f "$XSESSION_RC" ]; then
     echo "exec startlxde" > "$XSESSION_RC"
     chown "$REAL_USER":"$REAL_USER" "$XSESSION_RC"
 fi
+getent group netdev >/dev/null && usermod -aG netdev "$REAL_USER"
+getent group seat >/dev/null && usermod -aG seat "$REAL_USER"
 
 # ------------------------------------------------------------------
-# 12. Añadir el usuario a los grupos necesarios:
-#     - netdev: permisos de red sin ser root
-#     - seat: permisos para que seatd le dé control de la sesión
+# 13. Verificación final: reporte real del estado de cada servicio
 # ------------------------------------------------------------------
-if getent group netdev >/dev/null; then
-    usermod -aG netdev "$REAL_USER"
-fi
-if getent group seat >/dev/null; then
-    usermod -aG seat "$REAL_USER"
-fi
-
 echo ""
 echo "=================================================================="
-echo " Instalación completada."
-echo " - LXDE instalado."
-echo " - elogind + seatd instalados para la gestión de sesión."
-echo " - PolicyKit (policykit-1/polkitd + lxpolkit) instalado y agregado"
-echo "   al autostart, para autorizar apagar, montar USB, etc."
-echo " - LightDM instalado y habilitado: arrancará automáticamente al"
-echo "   encender el portátil y cargará la sesión LXDE."
-echo " - Servicios runit habilitados en /etc/service: dbus, elogind,"
-echo "   NetworkManager y lightdm."
-echo " - WiFi: icono de NetworkManager (nm-applet) en el panel."
-echo " - Volumen: icono de volumeicon en el panel."
+echo " VERIFICACIÓN FINAL"
+echo "=================================================================="
+for SVC in dbus elogind NetworkManager lightdm; do
+    verify_runit_service "$SVC"
+done
+for SVC in dbus elogind network-manager lightdm; do
+    verify_sysvinit_service "$SVC"
+done
 echo ""
-echo " Reinicia el equipo para que todo tome efecto:"
-echo "   sudo reboot"
+echo " Init activo en este arranque: $CURRENT_INIT"
+echo " Recuerda: el init con el que reinicies ahora quedará como"
+echo " predeterminado para el siguiente arranque."
+echo ""
+echo " Instalación completada. Reinicia con: sudo reboot"
+echo " Log completo: $LOG_FILE"
 echo "=================================================================="
