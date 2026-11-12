@@ -982,6 +982,7 @@ EOF
             ;;
     esac
     [ -n "$TARGET_HOME" ] && [ -d "$TARGET_HOME/.config" ] && chown -R "$TARGET_USER": "$TARGET_HOME/.config"
+    return 0
 }
 
 # ------------------------------------------------------------------------------
