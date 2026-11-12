@@ -26,6 +26,7 @@
 #   sudo ./antix-desktop-postinstall.sh --lxqt
 #   sudo ./antix-desktop-postinstall.sh --fluxbox
 #   sudo ./antix-desktop-postinstall.sh --conservar-inits   # no retira inits
+#   sudo ./antix-desktop-postinstall.sh --sin-ajustes  # sin ajustes de rendimiento
 #   ./antix-desktop-postinstall.sh --listar lxde    # solo muestra paquetes
 #
 # Es idempotente: se puede volver a ejecutar sin duplicar cambios.
@@ -42,6 +43,7 @@ PIN_FILE="/etc/apt/preferences.d/00elogind"
 FAILED_PKGS=""
 DESKTOP=""
 KEEP_INITS=0
+TUNE=1
 TARGET_USER=""
 TARGET_HOME=""
 
@@ -63,7 +65,7 @@ PKGS_APPS="firefox-esr firefox-esr-l10n-es-es libreoffice-writer
  fonts-dejavu-core fonts-liberation2 fonts-crosextra-carlito
  fonts-crosextra-caladea
  cups runit-service-cups system-config-printer printer-driver-hpcups printer-driver-gutenprint
- simple-scan gpicview mpv yt-dlp bluez runit-service-bluetooth blueman galculator mousepad scrot"
+ simple-scan gpicview mpv yt-dlp earlyoom bluez runit-service-bluetooth blueman galculator mousepad scrot"
 
 # Paquetes de los inits que se retiran. Se dejan SIEMPRE: runit-*, init,
 # initscripts y sysv-rc (runit los usa al arrancar), init-diversity-tools
@@ -195,6 +197,7 @@ parse_args() {
             --lxqt) DESKTOP="LXQT" ;;
             --fluxbox) DESKTOP="FLUXBOX" ;;
             --conservar-inits) KEEP_INITS=1 ;;
+            --sin-ajustes) TUNE=0 ;;
             --listar)
                 # Solo muestra los paquetes; lo usa la prueba automatica.
                 case "${2:-}" in
@@ -479,6 +482,104 @@ setup_services() {
 }
 
 # ------------------------------------------------------------------------------
+# 6c. Ajustes de rendimiento para equipos viejos (los mismos de Lazaro,
+#     adaptados a antiX y a su kernel 5.10)
+# ------------------------------------------------------------------------------
+# - zram: parte de la memoria se usa como "swap comprimido". Con 1 o 2 GB
+#   el equipo aguanta muchas mas pestanas antes de ponerse lento. Tamano
+#   igual a la RAM; zstd comprime mas, lz4 gasta menos procesador (se usa
+#   lz4 en procesadores de un solo nucleo).
+# - earlyoom: si la memoria se acaba, cierra el programa que mas usa en vez
+#   de dejar el equipo congelado varios minutos.
+# - Disco mecanico: planificador BFQ (el equipo responde mientras copia
+#   archivos) y escritura en bloques pequenos (sin pausas largas).
+# - Disco SSD: TRIM semanal para que no se vuelva lento con el tiempo.
+# - Con 4 GB o menos: paginas enormes de memoria solo a pedido (THP).
+TUNE_SYSCTL=/etc/sysctl.d/90-antix-equipos-viejos.conf
+TUNE_BOOT=/etc/runit/boot-run/S76-antix-equipos-viejos.stage1.sh
+setup_tuning() {
+    if [ "$TUNE" -eq 0 ]; then
+        log_info "Ajustes de rendimiento omitidos (--sin-ajustes)."
+        return 0
+    fi
+    log_info "== Ajustes de rendimiento para equipos viejos =="
+    ram_mb=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo)
+    cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
+    if [ "${cores:-1}" -ge 2 ]; then algo=zstd; else algo=lz4; fi
+    log_info "Memoria: ${ram_mb} MB, nucleos: ${cores}."
+
+    cat > "$TUNE_SYSCTL" <<'SYSCTL'
+# antix-desktop-postinstall: ajustes para equipos viejos.
+# Con zram conviene usar el swap comprimido antes que vaciar la cache.
+vm.swappiness=100
+vm.page-cluster=0
+# Escribir al disco en bloques de 48 MB como maximo: evita pausas largas
+# en discos lentos y memorias USB.
+vm.dirty_bytes=50331648
+vm.dirty_background_bytes=16777216
+SYSCTL
+    log_ok "Ajustes de memoria en $TUNE_SYSCTL"
+
+    if [ -d /etc/runit/boot-run ]; then
+        thp=""
+        [ "$ram_mb" -le 4096 ] && thp="madvise"
+        {
+            echo '#!/bin/sh'
+            echo '# antix-desktop-postinstall: se ejecuta en cada arranque (etapa 1 de runit).'
+            echo "ZRAM_ALGO=$algo"
+            echo "THP=$thp"
+            echo "SYSCTL_FILE=$TUNE_SYSCTL"
+            cat <<'BOOT'
+# zram: swap comprimido del tamano de la RAM.
+if [ ! -e /dev/zram0 ] && modprobe zram num_devices=1 2>/dev/null; then
+    ram_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+    zramctl /dev/zram0 --algorithm "$ZRAM_ALGO" --size "${ram_kb}KiB" 2>/dev/null \
+        || zramctl /dev/zram0 --size "${ram_kb}KiB" 2>/dev/null
+    mkswap /dev/zram0 >/dev/null 2>&1 && swapon -p 100 /dev/zram0 2>/dev/null
+fi
+# Planificador BFQ para discos mecanicos.
+modprobe bfq 2>/dev/null
+for q in /sys/block/sd*/queue /sys/block/hd*/queue; do
+    [ -r "$q/rotational" ] && [ "$(cat "$q/rotational")" = 1 ] || continue
+    grep -qw bfq "$q/scheduler" 2>/dev/null && echo bfq > "$q/scheduler"
+done
+# Paginas enormes solo a pedido (equipos de 4 GB o menos).
+if [ -n "$THP" ] && [ -w /sys/kernel/mm/transparent_hugepage/enabled ]; then
+    echo "$THP" > /sys/kernel/mm/transparent_hugepage/enabled
+fi
+sysctl -q -p "$SYSCTL_FILE" 2>/dev/null
+true
+BOOT
+        } > "$TUNE_BOOT"
+        chmod 755 "$TUNE_BOOT"
+        log_ok "zram ($algo, ${ram_mb} MB), BFQ y THP en cada arranque: $TUNE_BOOT"
+        # Se aplica tambien ahora, sin esperar al reinicio.
+        sh "$TUNE_BOOT" && log_ok "Ajustes aplicados en esta sesion."
+    else
+        log_warn "No se encontro /etc/runit/boot-run: zram y BFQ no se configuraron."
+    fi
+
+    if is_installed earlyoom; then
+        ensure_runit_service earlyoom "/usr/bin/earlyoom -r 3600" no
+    fi
+
+    # TRIM semanal solo si hay un SSD que lo acepte.
+    ssd=""
+    for q in /sys/block/*/queue; do
+        dev="${q%/queue}"; dev="${dev##*/}"
+        case "$dev" in loop*|ram*|zram*|sr*) continue ;; esac
+        [ "$(cat "$q/rotational" 2>/dev/null)" = 0 ] || continue
+        [ "$(cat "$q/discard_max_bytes" 2>/dev/null || echo 0)" != 0 ] && ssd="$ssd $dev"
+    done
+    if [ -n "$ssd" ] && [ -d /etc/cron.weekly ]; then
+        printf '#!/bin/sh\n# antix-desktop-postinstall: TRIM semanal de los SSD.\nfstrim -a >/dev/null 2>&1 || true\n' \
+            > /etc/cron.weekly/antix-fstrim
+        chmod 755 /etc/cron.weekly/antix-fstrim
+        log_ok "TRIM semanal para:$ssd"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # 7. Autoarranque y configuracion de cada escritorio
 # ------------------------------------------------------------------------------
 write_fluxbox_files() {
@@ -744,6 +845,7 @@ main() {
     install_packages
     setup_network
     setup_services
+    setup_tuning
     setup_desktop_config
     setup_display_manager
     setup_user

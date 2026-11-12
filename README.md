@@ -53,6 +53,21 @@ sudo ./antix-desktop-postinstall.sh --lxqt
 
 Se puede volver a ejecutar sin problema; no duplica nada. Todo lo que hace queda anotado en `/var/log/antix-desktop-postinstall.log`.
 
+## Ajustes para equipos viejos
+
+Son los mismos ajustes que usa Lázaro Linux, adaptados a antiX. El script los aplica solo y quedan activos en cada arranque:
+
+| Ajuste | Qué hace por el equipo |
+| --- | --- |
+| **zram** (memoria comprimida) | Una parte de la memoria se comprime y funciona como memoria extra. Con 1 o 2 GB se pueden abrir muchas más pestañas antes de que el equipo se ponga lento. En procesadores de un solo núcleo usa un método de compresión más liviano. |
+| **earlyoom** | Si la memoria se acaba, cierra el programa que más usa en lugar de dejar el equipo congelado varios minutos. |
+| **BFQ** (solo discos mecánicos) | El equipo sigue respondiendo mientras copia archivos grandes. |
+| **Escritura en bloques pequeños** | Evita pausas largas al guardar en discos lentos o memorias USB. |
+| **TRIM semanal** (solo discos SSD) | Evita que un SSD se vuelva lento con el tiempo. |
+| **Páginas de memoria a pedido** (4 GB o menos) | Ahorra memoria. |
+
+Si no los quieres, usa `--sin-ajustes`. Para quitarlos después, borra `/etc/sysctl.d/90-antix-equipos-viejos.conf` y `/etc/runit/boot-run/S76-antix-equipos-viejos.stage1.sh`, y reinicia.
+
 ## Solo runit
 
 antiX trae cinco "inits" para elegir al arrancar. El init es el primer programa que se ejecuta al encender el equipo, y el encargado de iniciar todo lo demás: la red, el sonido, la pantalla de inicio de sesión. antiX trae runit, sysVinit, dinit, s6-rc y s6-66. Este script configura todo para **runit** y **retira los otros cuatro**, así que el menú de arranque queda con una sola opción y nadie puede elegir por error un init en el que el escritorio no funciona.
