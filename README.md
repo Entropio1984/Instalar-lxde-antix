@@ -10,7 +10,8 @@ Al terminar, el equipo queda con:
 - **Atril**, para leer PDF.
 - **Impresoras y escáner**: CUPS con controladores para HP, Epson y Canon, y Simple Scan para escanear.
 - **Fotos** (gpicview), **calculadora** (galculator), **bloc de notas** (mousepad) y **captura de pantalla** (scrot).
-- **Videos, música y YouTube** con mpv. YouTube queda limitado a 480p para que no se trabe en equipos viejos: copia el enlace del video y ábrelo con `mpv <enlace>`.
+- **Videos y música** con mpv.
+- **YouTube ligero**: en el menú aparece "YouTube". Buscas el video y se abre en mpv, sin navegador, que es mucho más liviano para un equipo viejo. La calidad queda limitada a 480p (360p si el procesador tiene un solo núcleo) para que no se trabe. Funciona en 32 y 64 bits y se mantiene al día solo cada semana.
 - **Bluetooth**, para audífonos y parlantes, con su icono.
 - **Un explorador de archivos** que muestra las memorias USB al conectarlas (también las formateadas en Windows), y un programa para abrir archivos `.zip`.
 - **Wifi con icono** para elegir la red, e **icono de volumen**.

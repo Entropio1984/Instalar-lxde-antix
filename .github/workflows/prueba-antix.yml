@@ -155,6 +155,6 @@ jobs:
             echo "$p: $(sudo chroot /antix apt-cache policy $p 2>/dev/null | awk '/Candidate|Candidato/{print $2}')"
           done
           echo "=== Paquetes con antix, mx o fluxbox en el nombre ==="
-          sudo chroot /antix apt-cache search --names-only -e 'antix|^mx-|^mxfb|fluxbox' | sort | head -200
+          sudo chroot /antix apt-cache search --names-only 'antix|^mx-|^mxfb|fluxbox' | sort | head -200
           echo "=== Huella de pipe-viewer ==="
           curl -fsSL "https://codeload.github.com/trizen/pipe-viewer/tar.gz/refs/tags/0.5.9" | sha256sum
