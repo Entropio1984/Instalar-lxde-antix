@@ -147,3 +147,22 @@ jobs:
           sudo chroot /antix perl -MWWW::PipeViewer -e 'print "pipe-viewer $WWW::PipeViewer::VERSION\n"'
           sudo chroot /antix perl -MGtk3 -e 'print "Gtk3 para Perl OK\n"'
           echo "OK"
+
+      - name: Apariencia de Fluxbox (barra tint2 y tema oscuro)
+        if: matrix.escritorio == 'fluxbox'
+        run: |
+          sudo chroot /antix env ANTIX_SOLO_FUNCIONES=1 bash -c '. /root/antix-desktop-postinstall.sh; LOG_FILE=/tmp/fluxbox.log; DESKTOP=FLUXBOX; TARGET_HOME=""; TARGET_USER=""; setup_desktop_config'
+          for f in .fluxbox/startup .fluxbox/menu .fluxbox/init .fluxbox/overlay .config/tint2/tint2rc .config/gtk-3.0/settings.ini .gtkrc-2.0; do
+            test -s "/antix/etc/skel/$f" || { echo "::error::Falta /etc/skel/$f"; exit 1; }
+          done
+          echo "--- init de Fluxbox:"; cat /antix/etc/skel/.fluxbox/init
+          echo "--- Estilos de Fluxbox disponibles:"; ls /antix/usr/share/fluxbox/styles | tr '\n' ' '; echo
+          for f in firefox-esr pcmanfm lxterminal; do
+            test -e "/antix/usr/share/applications/$f.desktop" || { echo "::error::Falta el acceso $f.desktop de la barra"; exit 1; }
+          done
+          test -d /antix/usr/share/themes/Arc-Dark && test -d /antix/usr/share/icons/Papirus-Dark
+          # tint2 de verdad, en una pantalla virtual: no debe quejarse de su configuracion.
+          sudo chroot /antix apt-get install -y --no-install-recommends xvfb xauth >/dev/null
+          sudo chroot /antix bash -c 'Xvfb :99 -screen 0 1024x768x24 >/dev/null 2>&1 & sleep 2; DISPLAY=:99 timeout 5 tint2 -c /etc/skel/.config/tint2/tint2rc >/tmp/tint2.log 2>&1; rc=$?; pkill Xvfb; echo "tint2 termino con $rc (124 = seguia funcionando)"; [ $rc = 124 ]'
+          sudo grep -iE "unknown|invalid|error|warning" /antix/tmp/tint2.log || echo "tint2 no reporto problemas en su configuracion"
+          echo "OK"

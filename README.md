@@ -10,7 +10,8 @@ Al terminar, el equipo queda con:
 - **Atril**, para leer PDF.
 - **Impresoras y escáner**: CUPS con controladores para HP, Epson y Canon, y Simple Scan para escanear.
 - **Fotos** (gpicview), **calculadora** (galculator), **bloc de notas** (mousepad) y **captura de pantalla** (scrot).
-- **Videos, música y YouTube** con mpv. YouTube queda limitado a 480p para que no se trabe en equipos viejos: copia el enlace del video y ábrelo con `mpv <enlace>`.
+- **Videos y música** con mpv.
+- **YouTube ligero**: en el menú aparece "YouTube". Buscas el video y se abre en mpv, sin navegador, que es mucho más liviano para un equipo viejo. La calidad queda limitada a 480p (360p si el procesador tiene un solo núcleo) para que no se trabe. Funciona en 32 y 64 bits y se mantiene al día solo cada semana.
 - **Bluetooth**, para audífonos y parlantes, con su icono.
 - **Un explorador de archivos** que muestra las memorias USB al conectarlas (también las formateadas en Windows), y un programa para abrir archivos `.zip`.
 - **Wifi con icono** para elegir la red, e **icono de volumen**.
@@ -25,7 +26,7 @@ No instala nada más: se omiten los paquetes "recomendados" que apt agregaría p
 | Escritorio | Para qué equipo | Notas |
 | --- | --- | --- |
 | **LXDE** (recomendado) | Casi cualquiera, desde 1 GB de memoria | Sencillo, con barra de tareas y menú de inicio parecidos a Windows. |
-| **Fluxbox** | Muy viejo o con poca memoria (512 MB) | El más liviano. El menú aparece con clic derecho sobre el fondo de pantalla. |
+| **Fluxbox** | Muy viejo o con poca memoria (512 MB) | El más liviano. Trae una barra inferior al estilo de MX Linux (botón Menú, ventanas abiertas, wifi, volumen y reloj) con tema oscuro. El menú también aparece con clic derecho sobre el fondo de pantalla. |
 | **LXQt** | Con 2 GB de memoria o más | El más moderno. No funciona en procesadores sin SSE2 (ver abajo). |
 
 ## Cómo usarlo

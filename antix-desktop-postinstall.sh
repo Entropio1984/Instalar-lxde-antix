@@ -63,7 +63,7 @@ PKGS_LXDE="lxde-core lxde-icon-theme lxterminal lxappearance lxpolkit
  lxsession-logout volumeicon-alsa openbox"
 PKGS_LXQT="lxqt-core qterminal openbox breeze-icon-theme"
 PKGS_FLUXBOX="fluxbox pcmanfm lxterminal lxappearance lxpolkit lxsession-logout
- volumeicon-alsa"
+ volumeicon-alsa tint2 arc-theme papirus-icon-theme"
 PKGS_APPS="firefox-esr firefox-esr-l10n-es-es libreoffice-writer
  libreoffice-calc libreoffice-impress libreoffice-l10n-es libreoffice-gtk3
  libreoffice-style-colibre hunspell-es atril xarchiver unzip
@@ -494,7 +494,7 @@ QJS_VERSION="v0.18.0"
 QJS_SHA_X86="6e4e46849f6450a0afc572b8d10a0178d70040314f39669ca98ca8e95f114648"
 QJS_SHA_X64="85ded23b9fabe8c1644fc40a8d2bbdd71157affcbd807359c618cc717ee24d7d"
 PV_VERSION="0.5.9"
-PV_SHA=""
+PV_SHA="b6c705e8d6d749ec90dea7988f20c60646ae14aaaf125a16a97965f036f73cf2"
 
 download_checked() {
     url="$1"; dest="$2"; sha="$3"
@@ -753,6 +753,10 @@ write_fluxbox_files() {
         cat > "$dir/startup" <<'EOF'
 #!/bin/sh
 # Programas que arrancan junto con Fluxbox.
+# Fondo de pantalla: degradado oscuro (no gasta memoria en una imagen).
+fbsetroot -gradient diagonal -from '#3b4252' -to '#1b1e25' 2>/dev/null
+# Barra inferior al estilo de MX Linux: menu, ventanas, bandeja y reloj.
+command -v tint2 >/dev/null 2>&1 && tint2 &
 nm-applet &
 volumeicon &
 lxpolkit &
@@ -761,6 +765,23 @@ exec fluxbox
 EOF
         chmod 755 "$dir/startup"
     fi
+    # Con tint2 se oculta la barra propia de Fluxbox (si no, habria dos) y
+    # se permite que el boton "Menu" de tint2 abra el menu de Fluxbox.
+    if [ ! -f "$dir/init" ] && is_installed tint2; then
+        {
+            echo 'session.screen0.toolbar.visible: false'
+            echo 'session.screen0.allowRemoteActions: true'
+            echo 'session.screen0.workspaces: 2'
+            for st in bora_black carp zimek_darkblue; do
+                if [ -e "/usr/share/fluxbox/styles/$st" ]; then
+                    echo "session.styleFile: /usr/share/fluxbox/styles/$st"
+                    break
+                fi
+            done
+        } > "$dir/init"
+    fi
+    # Que el tema de las ventanas no cambie el fondo de pantalla.
+    [ -f "$dir/overlay" ] || printf 'background: none\n' > "$dir/overlay"
     if [ ! -f "$dir/menu" ]; then
         cat > "$dir/menu" <<'EOF'
 [begin] (Menu)
@@ -792,6 +813,121 @@ EOF
   [exec] (Salir / Apagar / Reiniciar) {lxsession-logout}
 [end]
 EOF
+    fi
+}
+
+# Barra tint2 y tema oscuro (Arc + iconos Papirus) para Fluxbox: lo mismo
+# que usa MX Linux, cuyos paquetes de configuracion no estan en antiX.
+write_fluxbox_look() {
+    home="$1"
+    mkdir -p "$home/.config/tint2" "$home/.config/gtk-3.0"
+    if [ ! -f "$home/.config/tint2/tint2rc" ]; then
+        cat > "$home/.config/tint2/tint2rc" <<'EOF'
+# antix-desktop-postinstall: barra inferior para Fluxbox.
+# Fondo 1: la barra
+rounded = 0
+border_width = 0
+background_color = #2f343f 100
+border_color = #2f343f 100
+# Fondo 2: ventana activa
+rounded = 3
+border_width = 0
+background_color = #5294e2 100
+border_color = #5294e2 100
+# Fondo 3: boton Menu
+rounded = 3
+border_width = 0
+background_color = #404552 100
+border_color = #404552 100
+
+panel_items = PLTSC
+panel_size = 100% 34
+panel_margin = 0 0
+panel_padding = 4 2 6
+panel_position = bottom center horizontal
+panel_background_id = 1
+panel_layer = top
+panel_dock = 0
+wm_menu = 1
+strut_policy = follow_size
+panel_window_name = tint2
+autohide = 0
+
+# Boton Menu: abre el menu de Fluxbox.
+button = new
+button_text = Menu
+button_lclick_command = fluxbox-remote RootMenu
+button_rclick_command = fluxbox-remote RootMenu
+button_font = Sans Bold 10
+button_font_color = #ffffff 100
+button_padding = 10 2
+button_background_id = 3
+button_centered = 1
+
+# Accesos rapidos
+launcher_padding = 4 2 4
+launcher_background_id = 0
+launcher_icon_size = 24
+launcher_icon_theme = Papirus-Dark
+launcher_icon_theme_override = 0
+launcher_tooltip = 1
+launcher_item_app = /usr/share/applications/firefox-esr.desktop
+launcher_item_app = /usr/share/applications/pcmanfm.desktop
+launcher_item_app = /usr/share/applications/lxterminal.desktop
+
+# Ventanas abiertas
+taskbar_mode = single_desktop
+taskbar_padding = 2 0 2
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+taskbar_name = 0
+task_text = 1
+task_icon = 1
+task_centered = 0
+task_maximum_size = 180 30
+task_padding = 6 2 6
+task_font = Sans 9
+task_tooltip = 1
+task_font_color = #d3dae3 100
+task_active_font_color = #ffffff 100
+task_background_id = 0
+task_active_background_id = 2
+mouse_left = toggle_iconify
+mouse_middle = close
+mouse_right = none
+mouse_scroll_up = none
+mouse_scroll_down = none
+
+# Bandeja (wifi, volumen, Bluetooth)
+systray_padding = 4 2 4
+systray_background_id = 0
+systray_sort = ascending
+systray_icon_size = 22
+
+# Reloj
+time1_format = %H:%M
+time2_format = %a %d %b
+time1_font = Sans Bold 9
+time2_font = Sans 8
+clock_font_color = #ffffff 100
+clock_padding = 6 0
+clock_background_id = 0
+clock_tooltip = %A %d de %B de %Y
+
+tooltip_show_timeout = 0.5
+tooltip_hide_timeout = 0.1
+tooltip_padding = 4 4
+tooltip_background_id = 1
+tooltip_font_color = #ffffff 100
+EOF
+    fi
+    if [ ! -f "$home/.config/gtk-3.0/settings.ini" ] && [ -d /usr/share/themes/Arc-Dark ]; then
+        printf '[Settings]\ngtk-theme-name=Arc-Dark\ngtk-icon-theme-name=Papirus-Dark\ngtk-font-name=Sans 10\n' \
+            > "$home/.config/gtk-3.0/settings.ini"
+    fi
+    if [ ! -f "$home/.gtkrc-2.0" ] && [ -d /usr/share/themes/Arc-Dark ]; then
+        printf 'gtk-theme-name="Arc-Dark"\ngtk-icon-theme-name="Papirus-Dark"\ngtk-font-name="Sans 10"\n' \
+            > "$home/.gtkrc-2.0"
     fi
 }
 
@@ -835,14 +971,18 @@ EOF
             ;;
         FLUXBOX)
             write_fluxbox_files /etc/skel/.fluxbox
+            is_installed tint2 && write_fluxbox_look /etc/skel
             if [ -n "$TARGET_HOME" ]; then
                 write_fluxbox_files "$TARGET_HOME/.fluxbox"
+                is_installed tint2 && write_fluxbox_look "$TARGET_HOME"
                 chown -R "$TARGET_USER": "$TARGET_HOME/.fluxbox"
+                [ -f "$TARGET_HOME/.gtkrc-2.0" ] && chown "$TARGET_USER": "$TARGET_HOME/.gtkrc-2.0"
             fi
-            log_ok "Menu y autoarranque de Fluxbox listos (wifi, volumen, permisos)."
+            log_ok "Fluxbox listo: barra tint2, tema oscuro, menu y autoarranque (wifi, volumen, permisos)."
             ;;
     esac
     [ -n "$TARGET_HOME" ] && [ -d "$TARGET_HOME/.config" ] && chown -R "$TARGET_USER": "$TARGET_HOME/.config"
+    return 0
 }
 
 # ------------------------------------------------------------------------------
