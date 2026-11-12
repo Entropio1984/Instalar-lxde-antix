@@ -35,7 +35,7 @@ No instala nada más: se omiten los paquetes "recomendados" que apt agregaría p
 3. Inicia sesión con tu usuario y escribe en la terminal:
 
 ```
-wget https://raw.githubusercontent.com/Entropio1984/instalar-lxde-antix/main/antix-desktop-postinstall.sh
+wget https://raw.githubusercontent.com/Entropio1984/antix-desktop-setup/main/antix-desktop-postinstall.sh
 chmod +x antix-desktop-postinstall.sh
 sudo ./antix-desktop-postinstall.sh
 ```
