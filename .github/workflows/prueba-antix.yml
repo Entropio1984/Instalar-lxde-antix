@@ -1,0 +1,149 @@
+# Prueba automatica: descarga antiX 26.1 Core real (32 y 64 bits), abre su
+# sistema de archivos en una carpeta (chroot) y alli:
+#   1. retira los inits que no son runit, como lo hace el script, y
+#      comprueba que runit sigue siendo el init y que no se borro nada mas;
+#   2. instala de verdad los paquetes de cada escritorio (LXDE, LXQt,
+#      Fluxbox) y muestra cuanto espacio ocupan.
+# No arranca el escritorio: eso se revisa a mano en una maquina virtual.
+name: Prueba en antiX 32 y 64 bits
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  ANTIX_VERSION: "26.1"
+
+jobs:
+  revisar-script:
+    name: Revisar el script (ShellCheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n antix-desktop-postinstall.sh
+      - run: shellcheck -S warning antix-desktop-postinstall.sh
+
+  antix:
+    name: antiX ${{ matrix.arch }} + ${{ matrix.escritorio }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ["386", "x64"]
+        escritorio: [lxde, lxqt, fluxbox]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Herramientas
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq squashfs-tools p7zip-full
+
+      - name: Guardar la ISO entre pruebas
+        uses: actions/cache@v4
+        with:
+          path: iso
+          key: antix-${{ env.ANTIX_VERSION }}-${{ matrix.arch }}-core
+
+      - name: Descargar antiX ${{ env.ANTIX_VERSION }} Core ${{ matrix.arch }}
+        run: |
+          mkdir -p iso
+          f="antiX-${ANTIX_VERSION}_${{ matrix.arch }}-core.iso"
+          if [ ! -s "iso/$f" ]; then
+            for intento in 1 2 3 4; do
+              curl -fsSL --retry 3 -o "iso/$f" \
+                "https://sourceforge.net/projects/antix-linux/files/Final/antiX-${ANTIX_VERSION}/$f/download" && break
+              sleep $((intento * 20))
+            done
+          fi
+          ls -la iso
+
+      - name: Abrir el sistema de antiX
+        run: |
+          f="iso/antiX-${ANTIX_VERSION}_${{ matrix.arch }}-core.iso"
+          7z e -y -o"$RUNNER_TEMP" "$f" antiX/linuxfs >/dev/null
+          sudo unsquashfs -q -d /antix "$RUNNER_TEMP/linuxfs"
+          sudo cp /etc/resolv.conf /antix/etc/resolv.conf
+          for d in proc sys dev dev/pts; do sudo mount --bind /$d /antix/$d; done
+          # En un chroot no se arrancan servicios.
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /antix/usr/sbin/policy-rc.d >/dev/null
+          sudo chmod 755 /antix/usr/sbin/policy-rc.d
+          sudo cp antix-desktop-postinstall.sh /antix/root/
+          sudo chroot /antix cat /etc/antix-version
+          sudo chroot /antix dpkg --print-architecture
+          sudo chroot /antix apt-get update -q
+
+      - name: Servicios de runit que ofrece antiX (informativo)
+        run: |
+          sudo chroot /antix apt-cache search --names-only '^runit-service-' | sort
+          sudo chroot /antix apt-cache show cups bluez | grep -E '^(Package|Version|Depends|Recommends|Suggests):'
+
+      - name: Retirar los otros inits (solo queda runit)
+        run: |
+          regex="$(bash antix-desktop-postinstall.sh --listar inits)"
+          pkgs="$(sudo chroot /antix dpkg-query -W -f='${Package} ${Status}\n' | awk '$NF=="installed"{print $1}' | grep -E "$regex")"
+          echo "Paquetes de inits a retirar: $(echo $pkgs)"
+          extra="$(sudo chroot /antix apt-get -s purge $pkgs | awk '/^(Remv|Purg) /{print $2}' | sed 's/:.*//' | grep -vE "$regex" || true)"
+          if [ -n "$extra" ]; then echo "::error::Se borraria tambien: $extra"; exit 1; fi
+          sudo chroot /antix env DEBIAN_FRONTEND=noninteractive apt-get purge -y $pkgs
+          echo "--- /sbin/init apunta a:"; sudo chroot /antix readlink -f /sbin/init
+          test "$(sudo chroot /antix readlink -f /sbin/init)" = "$(sudo chroot /antix readlink -f /lib/runit/runit-init)"
+          # Las entradas de GRUB salen de los inits que existen (10_linux).
+          quedan=""
+          for p in /lib/sysvinit/init /lib/s6-rc/s6-rc-init /lib/s6-66/s6-66-init /lib/dinit/dinit; do
+            [ -x "/antix$p" ] && quedan="$quedan $p"
+          done
+          if [ -n "$quedan" ]; then echo "::error::Siguen otros inits:$quedan"; exit 1; fi
+          for p in runit-init-antix runit-antix initscripts sysv-rc init init-diversity-tools grub-init-diversity; do
+            sudo chroot /antix dpkg-query -W -f='${Package} ${Status}\n' "$p" | grep -q 'ok installed' || { echo "::error::Se perdio $p"; exit 1; }
+          done
+          echo "OK: solo queda runit."
+
+      - name: Instalar ${{ matrix.escritorio }} y los programas de uso general
+        run: |
+          pk="$(bash antix-desktop-postinstall.sh --listar ${{ matrix.escritorio }})"
+          antes="$(sudo du -sm /antix --exclude=/antix/proc --exclude=/antix/sys --exclude=/antix/dev | cut -f1)"
+          sudo chroot /antix env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $pk 2>&1 | tee instalar.log
+          sudo chroot /antix apt-get clean
+          despues="$(sudo du -sm /antix --exclude=/antix/proc --exclude=/antix/sys --exclude=/antix/dev | cut -f1)"
+          falta=""
+          for p in $pk; do
+            sudo chroot /antix dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || falta="$falta $p"
+          done
+          nuevos="$(grep -c '^Setting up ' instalar.log || true)"
+          {
+            echo "### antiX ${{ matrix.arch }} + ${{ matrix.escritorio }}"
+            echo "- Paquetes nuevos: $nuevos"
+            echo "- Espacio en disco: $antes MB antes, $despues MB despues (+$((despues - antes)) MB)"
+            echo "- Sin instalar: ${falta:-ninguno}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -n "$falta" ]; then echo "::error::No se instalaron:$falta"; exit 1; fi
+          sudo chroot /antix dpkg -l | grep -E '^ii +(elogind|libpam-elogind|sddm|systemd) ' && { echo "::error::Se instalo algo que no debia"; exit 1; } || true
+          for f in "/usr/share/xsessions/$( case ${{ matrix.escritorio }} in lxde) echo LXDE;; lxqt) echo lxqt;; fluxbox) echo fluxbox;; esac ).desktop" /usr/sbin/lightdm /usr/sbin/NetworkManager /usr/bin/firefox-esr /usr/bin/atril /usr/sbin/cupsd /usr/bin/mpv /usr/bin/blueman-applet; do
+            test -e "/antix$f" || { echo "::error::Falta $f"; exit 1; }
+          done
+          # Servicio de LightDM (el script lo instala al final).
+          sudo chroot /antix env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends runit-service-lightdm
+          echo "--- Servicios en /etc/sv:"; ls /antix/etc/sv
+          echo "--- Servicios activados:"; ls -la /antix/etc/runit/runsvdir/default/
+          for c in "network-manager NetworkManager" cups "bluetooth bluetoothd" lightdm consolekit; do
+            hay=""; for n in $c; do [ -x "/antix/etc/sv/$n/run" ] && hay="$hay $n"; done
+            echo "Servicio [$c]:${hay:- NINGUNO}"
+          done
+          echo "OK"
+
+      - name: YouTube ligero (yt-dlp, QuickJS-NG y gtk-pipe-viewer)
+        run: |
+          echo "Huella de pipe-viewer: $(curl -fsSL https://codeload.github.com/trizen/pipe-viewer/tar.gz/refs/tags/$(grep '^PV_VERSION=' antix-desktop-postinstall.sh | cut -d'"' -f2) | sha256sum | cut -d' ' -f1)"
+          sudo chroot /antix env ANTIX_SOLO_FUNCIONES=1 bash -c '. /root/antix-desktop-postinstall.sh; LOG_FILE=/tmp/youtube.log; TARGET_HOME=""; TARGET_USER=""; setup_youtube' || true
+          sudo tail -n 40 /antix/tmp/youtube.log || true
+          for f in /usr/local/bin/yt-dlp /usr/local/bin/qjs /usr/local/bin/gtk-pipe-viewer /usr/local/bin/pipe-viewer /etc/yt-dlp.conf /etc/mpv/mpv.conf /usr/local/share/applications/antix-youtube.desktop; do
+            test -e "/antix$f" || { echo "::error::Falta $f"; exit 1; }
+          done
+          sudo chroot /antix /usr/local/bin/qjs -e 'print("QuickJS funciona")'
+          sudo chroot /antix /usr/local/bin/yt-dlp --version
+          sudo chroot /antix /usr/local/bin/yt-dlp -v --simulate 2>&1 | grep -iE 'JS runtimes|python|exe versions' || true
+          sudo chroot /antix /usr/local/bin/yt-dlp -v --simulate 2>&1 | grep -iE 'JS runtimes:.*quickjs' || { echo "::error::yt-dlp no ve QuickJS"; exit 1; }
+          sudo chroot /antix perl -MWWW::PipeViewer -e 'print "pipe-viewer $WWW::PipeViewer::VERSION\n"'
+          sudo chroot /antix perl -MGtk3 -e 'print "Gtk3 para Perl OK\n"'
+          echo "OK"
