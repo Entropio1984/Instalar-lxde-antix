@@ -48,7 +48,8 @@ TARGET_HOME=""
 # Listas de paquetes (se instalan sin los "recomendados" para no sumar peso)
 # ------------------------------------------------------------------------------
 PKGS_BASE="xorg dbus-x11 consolekit polkitd adwaita-icon-theme alsa-utils
- network-manager network-manager-gnome lightdm lightdm-gtk-greeter"
+ network-manager network-manager-gnome lightdm lightdm-gtk-greeter
+ gvfs gvfs-backends udisks2 ntfs-3g exfatprogs"
 PKGS_LXDE="lxde-core lxde-icon-theme lxterminal lxappearance lxpolkit
  lxsession-logout volumeicon-alsa openbox"
 PKGS_LXQT="lxqt-core qterminal openbox breeze-icon-theme"

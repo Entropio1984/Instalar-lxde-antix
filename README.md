@@ -8,7 +8,7 @@ Al terminar, el equipo queda con:
 - **Firefox ESR** en español, para navegar.
 - **LibreOffice** en español: Writer (documentos), Calc (hojas de cálculo) e Impress (presentaciones), con corrector ortográfico.
 - **Atril**, para leer PDF.
-- **Un explorador de archivos** y un programa para abrir archivos `.zip`.
+- **Un explorador de archivos** que muestra las memorias USB al conectarlas (también las formateadas en Windows), y un programa para abrir archivos `.zip`.
 - **Wifi con icono** para elegir la red, e **icono de volumen**.
 - **Tipos de letra compatibles con Word** (Calibri, Cambria, Arial, Times), para que los trabajos se vean igual que en el colegio.
 - **Pantalla de inicio de sesión** gráfica (LightDM).
