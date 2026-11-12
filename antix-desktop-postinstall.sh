@@ -63,7 +63,11 @@ PKGS_APPS="firefox-esr firefox-esr-l10n-es-es libreoffice-writer
 # Paquetes de los inits que se retiran. Se dejan SIEMPRE: runit-*, init,
 # initscripts y sysv-rc (runit los usa al arrancar), init-diversity-tools
 # y grub-init-diversity (apagado y menu de arranque).
-INIT_PKG_REGEX='^(sysvinit-init-antix|dinit|dinit-.*|s6|s6-rc|s6-rc-.*|s6-66-.*|66|66-.*|s6-linux-init|s6-linux-utils|s6-portable-utils|libs6rc-.*|libs6-linux-init-.*)$'
+# Tambien se dejan s6, s6-linux-init y sus utilidades: son bibliotecas
+# pequenas que ya no arrancan nada, y el script de desinstalacion de
+# s6-linux-init en antiX 26.1 falla (borra el usuario s6log y luego su
+# grupo, que ya no existe), lo que dejaria apt a medio camino.
+INIT_PKG_REGEX='^(sysvinit-init-antix|dinit|dinit-.*|s6-rc|s6-rc-.*|s6-66-.*|66|66-.*|libs6rc-.*)$'
 
 desktop_pkgs() {
     case "$1" in
