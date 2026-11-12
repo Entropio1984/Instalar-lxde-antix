@@ -122,4 +122,12 @@ jobs:
           for f in "/usr/share/xsessions/$( case ${{ matrix.escritorio }} in lxde) echo LXDE;; lxqt) echo lxqt;; fluxbox) echo fluxbox;; esac ).desktop" /usr/sbin/lightdm /usr/sbin/NetworkManager /usr/bin/firefox-esr /usr/bin/atril /usr/sbin/cupsd /usr/bin/mpv /usr/bin/blueman-applet; do
             test -e "/antix$f" || { echo "::error::Falta $f"; exit 1; }
           done
+          # Servicio de LightDM (el script lo instala al final).
+          sudo chroot /antix env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends runit-service-lightdm
+          echo "--- Servicios en /etc/sv:"; ls /antix/etc/sv
+          echo "--- Servicios activados:"; ls -la /antix/etc/runit/runsvdir/default/
+          for c in "network-manager NetworkManager" cups "bluetooth bluetoothd" lightdm consolekit; do
+            hay=""; for n in $c; do [ -x "/antix/etc/sv/$n/run" ] && hay="$hay $n"; done
+            echo "Servicio [$c]:${hay:- NINGUNO}"
+          done
           echo "OK"

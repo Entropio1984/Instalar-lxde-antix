@@ -50,6 +50,7 @@ TARGET_HOME=""
 # ------------------------------------------------------------------------------
 PKGS_BASE="xorg dbus-x11 consolekit polkitd adwaita-icon-theme alsa-utils
  network-manager network-manager-gnome lightdm lightdm-gtk-greeter
+ runit-service-network-manager runit-service-consolekit
  gvfs gvfs-backends udisks2 ntfs-3g exfatprogs"
 PKGS_LXDE="lxde-core lxde-icon-theme lxterminal lxappearance lxpolkit
  lxsession-logout volumeicon-alsa openbox"
@@ -61,8 +62,8 @@ PKGS_APPS="firefox-esr firefox-esr-l10n-es-es libreoffice-writer
  libreoffice-style-colibre hunspell-es atril xarchiver unzip
  fonts-dejavu-core fonts-liberation2 fonts-crosextra-carlito
  fonts-crosextra-caladea
- cups system-config-printer printer-driver-hpcups printer-driver-gutenprint
- simple-scan gpicview mpv yt-dlp bluez blueman galculator mousepad scrot"
+ cups runit-service-cups system-config-printer printer-driver-hpcups printer-driver-gutenprint
+ simple-scan gpicview mpv yt-dlp bluez runit-service-bluetooth blueman galculator mousepad scrot"
 
 # Paquetes de los inits que se retiran. Se dejan SIEMPRE: runit-*, init,
 # initscripts y sysv-rc (runit los usa al arrancar), init-diversity-tools
@@ -122,13 +123,25 @@ apt_install() {
     done
 }
 
-# Crea (si no existe) y activa un servicio de runit. $1 = nombre,
-# $2 = comando, $3 = "yes" si necesita D-Bus. runit arranca los servicios
-# en paralelo: uno que necesita D-Bus termina si D-Bus aun no esta listo,
-# y runit lo reintenta al segundo. Si el paquete ya trae su propio
-# servicio de runit, se usa ese.
+# Nombre del servicio de runit que existe en /etc/sv, entre varios
+# candidatos ($1, separados por espacios). antiX trae servicios propios
+# (paquetes runit-service-*); si no hay, se usa el primero.
+runit_name() {
+    for c in $1; do
+        [ -x "$SV_DIR/$c/run" ] && { echo "$c"; return 0; }
+    done
+    set -- $1
+    echo "$1"
+}
+
+# Activa un servicio de runit. $1 = nombres posibles (el primero es el de
+# antiX), $2 = comando, $3 = "yes" si necesita D-Bus. Si antiX ya trae el
+# servicio, se usa ese; si no, se crea uno. runit arranca los servicios en
+# paralelo: uno que necesita D-Bus termina si D-Bus aun no esta listo, y
+# runit lo reintenta al segundo.
 ensure_runit_service() {
-    name="$1"; cmd="$2"; needs_dbus="$3"
+    cands="$1"; cmd="$2"; needs_dbus="$3"
+    name="$(runit_name "$cands")"
     if [ ! -x "$SV_DIR/$name/run" ]; then
         mkdir -p "$SV_DIR/$name"
         {
@@ -142,6 +155,16 @@ ensure_runit_service() {
         chmod 755 "$SV_DIR/$name/run"
         log_ok "Servicio de runit creado: $SV_DIR/$name"
     fi
+    # El mismo programa no debe quedar activado dos veces con otro nombre
+    # (por ejemplo, uno creado por una version anterior de este script).
+    for c in $cands; do
+        [ "$c" = "$name" ] && continue
+        if [ -L "$SERVICE_DIR/$c" ]; then
+            sv down "$SERVICE_DIR/$c" >/dev/null 2>&1
+            rm -f "$SERVICE_DIR/$c"
+            log_ok "Servicio duplicado '$c' desactivado (se usa '$name')."
+        fi
+    done
     if [ ! -e "$SERVICE_DIR/$name" ]; then
         ln -s "$SV_DIR/$name" "$SERVICE_DIR/$name"
         log_ok "Servicio '$name' activado."
@@ -419,7 +442,7 @@ setup_network() {
         log_info "Si usabas wifi, vuelve a conectarte desde el icono de red."
     fi
 
-    ensure_runit_service NetworkManager "/usr/sbin/NetworkManager --no-daemon" yes
+    ensure_runit_service "network-manager NetworkManager" "/usr/sbin/NetworkManager --no-daemon" yes
 }
 
 # ------------------------------------------------------------------------------
@@ -438,7 +461,7 @@ setup_services() {
         [ -x "$f" ] && { btd="$f"; break; }
     done
     if [ -n "$btd" ]; then
-        ensure_runit_service bluetooth "$btd -n" yes
+        ensure_runit_service "bluetooth bluetoothd" "$btd -n" yes
     else
         log_warn "Bluetooth no se instalo."
     fi
@@ -640,11 +663,12 @@ retire_other_network() {
         [ -e "$SERVICE_DIR/$s" ] && others="$others $s"
     done
     [ -n "$others" ] || return 0
-    [ -e "$SERVICE_DIR/NetworkManager" ] || return 0
+    nm="$(runit_name "network-manager NetworkManager")"
+    [ -e "$SERVICE_DIR/$nm" ] || return 0
     log_info "== Esperando a que NetworkManager se estabilice para retirar:$others =="
     up=0; i=0
     while [ "$i" -lt 12 ]; do
-        up="$(sv status "$SERVICE_DIR/NetworkManager" 2>/dev/null \
+        up="$(sv status "$SERVICE_DIR/$nm" 2>/dev/null \
               | sed -n 's/^run: [^(]*(pid [0-9]*) \([0-9]*\)s.*/\1/p')"
         [ "${up:-0}" -ge 15 ] && break
         sleep 3; i=$((i + 1))
@@ -654,7 +678,7 @@ retire_other_network() {
             sv down "$SERVICE_DIR/$s" >/dev/null 2>&1
             rm -f "$SERVICE_DIR/$s"
         done
-        sv restart "$SERVICE_DIR/NetworkManager" >/dev/null 2>&1
+        sv restart "$SERVICE_DIR/$nm" >/dev/null 2>&1
         log_ok "Retirado:$others. NetworkManager maneja la red."
     else
         log_warn "NetworkManager no se estabilizo (en marcha: ${up:-?} s). Se mantiene:$others para no dejar el equipo sin red."
@@ -672,7 +696,7 @@ final_report() {
     else
         log_ok "elogind no esta instalado."
     fi
-    for s in dbus seatd NetworkManager; do
+    for s in dbus seatd "$(runit_name "network-manager NetworkManager")" cups "$(runit_name "bluetooth bluetoothd")"; do
         st="$(sv status "$SERVICE_DIR/$s" 2>/dev/null | cut -d: -f1)"
         if [ "$st" = "run" ]; then log_ok "Servicio '$s' corriendo."; else log_warn "Servicio '$s': ${st:-no activado}."; fi
     done
@@ -703,6 +727,9 @@ enable_display_manager() {
     else
         log_info "Listo. Reinicia para empezar a usar $DESKTOP: sudo reboot"
     fi
+    # El servicio de antiX para LightDM se instala recien aqui: al
+    # instalarse se activa solo y la pantalla cambia al inicio grafico.
+    is_installed runit-service-lightdm || apt_install runit-service-lightdm
     ensure_runit_service lightdm "/usr/sbin/lightdm" yes
 }
 
