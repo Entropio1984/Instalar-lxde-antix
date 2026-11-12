@@ -78,6 +78,17 @@ jobs:
           sudo chroot /antix apt-cache search --names-only '^runit-service-' | sort
           sudo chroot /antix apt-cache show cups bluez | grep -E '^(Package|Version|Depends|Recommends|Suggests):'
 
+      - name: Apariencia de Fluxbox disponible (informativo)
+        run: |
+          echo "=== Paquetes candidatos ==="
+          for p in tint2 conky conky-std conky-all rofi jgmenu feh nitrogen idesk rox-filer zzzfm spacefm plank wmctrl papirus-icon-theme numix-gtk-theme arc-theme mx-fluxbox mxfb-goodies mxfb-docks mxfb-accessories mx-tweak; do
+            echo "$p: $(sudo chroot /antix apt-cache policy $p 2>/dev/null | awk '/Candidate|Candidato/{print $2}')"
+          done
+          echo "=== Paquetes con antix, mx o fluxbox en el nombre ==="
+          sudo chroot /antix apt-cache search --names-only -e 'antix|^mx-|^mxfb|fluxbox' | sort | head -200
+          echo "=== Huella de pipe-viewer ==="
+          curl -fsSL "https://codeload.github.com/trizen/pipe-viewer/tar.gz/refs/tags/0.5.9" | sha256sum
+
       - name: Retirar los otros inits (solo queda runit)
         run: |
           regex="$(bash antix-desktop-postinstall.sh --listar inits)"
