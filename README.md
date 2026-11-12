@@ -26,7 +26,7 @@ No instala nada más: se omiten los paquetes "recomendados" que apt agregaría p
 | Escritorio | Para qué equipo | Notas |
 | --- | --- | --- |
 | **LXDE** (recomendado) | Casi cualquiera, desde 1 GB de memoria | Sencillo, con barra de tareas y menú de inicio parecidos a Windows. |
-| **Fluxbox** | Muy viejo o con poca memoria (512 MB) | El más liviano. El menú aparece con clic derecho sobre el fondo de pantalla. |
+| **Fluxbox** | Muy viejo o con poca memoria (512 MB) | El más liviano. Trae una barra inferior al estilo de MX Linux (botón Menú, ventanas abiertas, wifi, volumen y reloj) con tema oscuro. El menú también aparece con clic derecho sobre el fondo de pantalla. |
 | **LXQt** | Con 2 GB de memoria o más | El más moderno. No funciona en procesadores sin SSE2 (ver abajo). |
 
 ## Cómo usarlo
