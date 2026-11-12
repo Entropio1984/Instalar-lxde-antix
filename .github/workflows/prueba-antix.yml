@@ -73,6 +73,11 @@ jobs:
           sudo chroot /antix dpkg --print-architecture
           sudo chroot /antix apt-get update -q
 
+      - name: Servicios de runit que ofrece antiX (informativo)
+        run: |
+          sudo chroot /antix apt-cache search --names-only '^runit-service-' | sort
+          sudo chroot /antix apt-cache show cups bluez | grep -E '^(Package|Version|Depends|Recommends|Suggests):'
+
       - name: Retirar los otros inits (solo queda runit)
         run: |
           regex="$(bash antix-desktop-postinstall.sh --listar inits)"
