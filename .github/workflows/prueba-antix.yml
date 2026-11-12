@@ -94,7 +94,7 @@ jobs:
           done
           echo "OK: solo queda runit."
 
-      - name: Instalar ${{ matrix.escritorio }} y los programas del estudiante
+      - name: Instalar ${{ matrix.escritorio }} y los programas de uso general
         run: |
           pk="$(bash antix-desktop-postinstall.sh --listar ${{ matrix.escritorio }})"
           antes="$(sudo du -sm /antix --exclude=/antix/proc --exclude=/antix/sys --exclude=/antix/dev | cut -f1)"
@@ -114,7 +114,7 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           if [ -n "$falta" ]; then echo "::error::No se instalaron:$falta"; exit 1; fi
           sudo chroot /antix dpkg -l | grep -E '^ii +(elogind|libpam-elogind|sddm|systemd) ' && { echo "::error::Se instalo algo que no debia"; exit 1; } || true
-          for f in "/usr/share/xsessions/$( case ${{ matrix.escritorio }} in lxde) echo LXDE;; lxqt) echo lxqt;; fluxbox) echo fluxbox;; esac ).desktop" /usr/sbin/lightdm /usr/sbin/NetworkManager /usr/bin/firefox-esr /usr/bin/atril; do
+          for f in "/usr/share/xsessions/$( case ${{ matrix.escritorio }} in lxde) echo LXDE;; lxqt) echo lxqt;; fluxbox) echo fluxbox;; esac ).desktop" /usr/sbin/lightdm /usr/sbin/NetworkManager /usr/bin/firefox-esr /usr/bin/atril /usr/sbin/cupsd /usr/bin/mpv /usr/bin/blueman-applet; do
             test -e "/antix$f" || { echo "::error::Falta $f"; exit 1; }
           done
           echo "OK"

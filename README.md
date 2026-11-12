@@ -1,6 +1,6 @@
-# antiX para estudiantes
+# antiX para uso general
 
-Un script que convierte una instalación de **antiX 26 Core** (32 o 64 bits) en un equipo listo para un estudiante de colegio. Está pensado para revivir portátiles y computadores viejos.
+Un script que convierte una instalación de **antiX 26 Core** (32 o 64 bits) en un equipo listo para el uso diario en casa, el estudio o la oficina. Está pensado para revivir portátiles y computadores viejos.
 
 Al terminar, el equipo queda con:
 
@@ -8,9 +8,13 @@ Al terminar, el equipo queda con:
 - **Firefox ESR** en español, para navegar.
 - **LibreOffice** en español: Writer (documentos), Calc (hojas de cálculo) e Impress (presentaciones), con corrector ortográfico.
 - **Atril**, para leer PDF.
+- **Impresoras y escáner**: CUPS con controladores para HP, Epson y Canon, y Simple Scan para escanear.
+- **Fotos** (gpicview), **calculadora** (galculator), **bloc de notas** (mousepad) y **captura de pantalla** (scrot).
+- **Videos, música y YouTube** con mpv. YouTube queda limitado a 480p para que no se trabe en equipos viejos: copia el enlace del video y ábrelo con `mpv <enlace>`.
+- **Bluetooth**, para audífonos y parlantes, con su icono.
 - **Un explorador de archivos** que muestra las memorias USB al conectarlas (también las formateadas en Windows), y un programa para abrir archivos `.zip`.
 - **Wifi con icono** para elegir la red, e **icono de volumen**.
-- **Tipos de letra compatibles con Word** (Calibri, Cambria, Arial, Times), para que los trabajos se vean igual que en el colegio.
+- **Tipos de letra compatibles con Word** (Calibri, Cambria, Arial, Times), para que los documentos se vean igual que en Office.
 - **Pantalla de inicio de sesión** gráfica (LightDM).
 - **Solo runit** como sistema de arranque (más abajo se explica qué es esto).
 
@@ -80,4 +84,4 @@ grep -qw sse2 /proc/cpuinfo && echo "Tiene SSE2" || echo "NO tiene SSE2"
 
 ## Prueba automática
 
-En cada cambio, GitHub descarga antiX 26.1 Core de 32 y de 64 bits, retira los otros inits como lo hace el script e instala los programas de cada escritorio. Así comprueba que todos los paquetes existen y caben en ambas versiones. No arranca el escritorio: eso se prueba a mano en una máquina virtual.
+En cada cambio, GitHub descarga antiX 26.1 Core de 32 y de 64 bits, retira los otros inits como lo hace el script e instala los programas en cada escritorio. Así comprueba que todos los paquetes existen y caben en ambas versiones. No arranca el escritorio: eso se prueba a mano en una máquina virtual.

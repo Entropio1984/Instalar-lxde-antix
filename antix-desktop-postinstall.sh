@@ -3,14 +3,15 @@
 # antix-desktop-postinstall.sh
 #
 # Convierte una instalacion de antiX 26 Core (32 o 64 bits) en un equipo
-# listo para un estudiante de colegio:
+# listo para uso general (hogar, estudio, oficina):
 #   - Deja runit como UNICO init: retira sysVinit, dinit, s6-rc y s6-66 y
 #     sus entradas del menu de arranque (GRUB).
 #   - Instala un escritorio liviano a eleccion: LXDE, LXQt o Fluxbox.
 #   - Instala solo lo necesario: explorador de archivos, Firefox ESR,
-#     LibreOffice (Writer, Calc, Impress), lector de PDF, wifi con icono,
-#     volumen, fuentes compatibles con documentos de Office y LightDM
-#     (inicio de sesion grafico).
+#     LibreOffice (Writer, Calc, Impress), lector de PDF, impresora y
+#     escaner, visor de fotos, videos y YouTube (mpv), Bluetooth,
+#     calculadora, bloc de notas, wifi con icono, volumen, fuentes
+#     compatibles con documentos de Office y LightDM (inicio grafico).
 #
 # Por que asi (problemas demostrados en maquinas virtuales con antiX 26):
 #   - elogind instalado pero sin correr bajo runit hacia que cada consulta
@@ -59,7 +60,9 @@ PKGS_APPS="firefox-esr firefox-esr-l10n-es-es libreoffice-writer
  libreoffice-calc libreoffice-impress libreoffice-l10n-es libreoffice-gtk3
  libreoffice-style-colibre hunspell-es atril xarchiver unzip
  fonts-dejavu-core fonts-liberation2 fonts-crosextra-carlito
- fonts-crosextra-caladea"
+ fonts-crosextra-caladea
+ cups system-config-printer printer-driver-hpcups printer-driver-gutenprint
+ simple-scan gpicview mpv yt-dlp bluez blueman galculator mousepad scrot"
 
 # Paquetes de los inits que se retiran. Se dejan SIEMPRE: runit-*, init,
 # initscripts y sysv-rc (runit los usa al arrancar), init-diversity-tools
@@ -379,7 +382,7 @@ setup_session_tracking() {
 # 5. Escritorio y programas
 # ------------------------------------------------------------------------------
 install_packages() {
-    log_info "== Instalando $DESKTOP y los programas del estudiante =="
+    log_info "== Instalando $DESKTOP y los programas de uso general =="
     # shellcheck disable=SC2046
     apt_install $(desktop_pkgs "$DESKTOP")
 
@@ -420,6 +423,39 @@ setup_network() {
 }
 
 # ------------------------------------------------------------------------------
+# 6b. Impresoras, Bluetooth y YouTube
+# ------------------------------------------------------------------------------
+setup_services() {
+    log_info "== Impresoras, Bluetooth y videos =="
+    # runit no arranca estos servicios por su cuenta: se crean si faltan.
+    if [ -x /usr/sbin/cupsd ]; then
+        ensure_runit_service cups "/usr/sbin/cupsd -f" no
+    else
+        log_warn "CUPS no se instalo: no se podra imprimir."
+    fi
+    btd=""
+    for f in /usr/libexec/bluetooth/bluetoothd /usr/lib/bluetooth/bluetoothd; do
+        [ -x "$f" ] && { btd="$f"; break; }
+    done
+    if [ -n "$btd" ]; then
+        ensure_runit_service bluetooth "$btd -n" yes
+    else
+        log_warn "Bluetooth no se instalo."
+    fi
+    # Videos de YouTube en calidad baja (480p): fluidos en equipos viejos.
+    # Se abren con: mpv <enlace de YouTube>
+    if is_installed mpv; then
+        mkdir -p /etc/mpv
+        if ! grep -q '^ytdl-format=' /etc/mpv/mpv.conf 2>/dev/null; then
+            printf '%s\n' '# antix-desktop-postinstall: YouTube en 480p como maximo' \
+                'ytdl-format=bestvideo[height<=480]+bestaudio/best[height<=480]/best' \
+                >> /etc/mpv/mpv.conf
+            log_ok "mpv: YouTube limitado a 480p para que no se trabe."
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # 7. Autoarranque y configuracion de cada escritorio
 # ------------------------------------------------------------------------------
 write_fluxbox_files() {
@@ -432,6 +468,7 @@ write_fluxbox_files() {
 nm-applet &
 volumeicon &
 lxpolkit &
+blueman-applet &
 exec fluxbox
 EOF
         chmod 755 "$dir/startup"
@@ -445,6 +482,13 @@ EOF
   [exec] (Hojas de calculo - Calc) {libreoffice --calc}
   [exec] (Presentaciones - Impress) {libreoffice --impress}
   [exec] (Lector de PDF) {atril}
+  [exec] (Fotos) {gpicview}
+  [exec] (Calculadora) {galculator}
+  [exec] (Bloc de notas) {mousepad}
+  [exec] (Escaner) {simple-scan}
+  [exec] (Impresoras) {system-config-printer}
+  [exec] (Bluetooth) {blueman-manager}
+  [exec] (Captura de pantalla) {scrot -e 'mv $f ~/'}
   [exec] (Terminal) {lxterminal}
   [separator]
   [submenu] (Todos los programas)
@@ -567,7 +611,7 @@ setup_user() {
 
     [ -n "$TARGET_USER" ] || return 0
     log_info "== Ajustes del usuario $TARGET_USER =="
-    for grp in netdev audio video plugdev; do
+    for grp in netdev audio video plugdev lpadmin scanner bluetooth; do
         if getent group "$grp" >/dev/null; then
             usermod -aG "$grp" "$TARGET_USER" && log_ok "Agregado al grupo '$grp'."
         fi
@@ -672,6 +716,7 @@ main() {
     setup_session_tracking
     install_packages
     setup_network
+    setup_services
     setup_desktop_config
     setup_display_manager
     setup_user
