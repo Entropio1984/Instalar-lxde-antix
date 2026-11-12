@@ -54,6 +54,11 @@ PKGS_BASE="xorg dbus-x11 consolekit polkitd adwaita-icon-theme alsa-utils
  network-manager network-manager-gnome lightdm lightdm-gtk-greeter
  runit-service-network-manager runit-service-consolekit
  gvfs gvfs-backends udisks2 ntfs-3g exfatprogs"
+# Para "YouTube ligero" (gtk-pipe-viewer se instala desde su pagina).
+PKGS_YOUTUBE="python3 libmodule-build-perl libdata-dump-perl libjson-perl
+ libjson-xs-perl libwww-perl liblwp-protocol-https-perl liburi-perl
+ libgtk3-perl libfile-sharedir-perl libunicode-linebreak-perl
+ libterm-readline-gnu-perl"
 PKGS_LXDE="lxde-core lxde-icon-theme lxterminal lxappearance lxpolkit
  lxsession-logout volumeicon-alsa openbox"
 PKGS_LXQT="lxqt-core qterminal openbox breeze-icon-theme"
@@ -65,7 +70,7 @@ PKGS_APPS="firefox-esr firefox-esr-l10n-es-es libreoffice-writer
  fonts-dejavu-core fonts-liberation2 fonts-crosextra-carlito
  fonts-crosextra-caladea
  cups runit-service-cups system-config-printer printer-driver-hpcups printer-driver-gutenprint
- simple-scan gpicview mpv yt-dlp earlyoom bluez runit-service-bluetooth blueman galculator mousepad scrot"
+ simple-scan gpicview mpv earlyoom bluez runit-service-bluetooth blueman galculator mousepad scrot"
 
 # Paquetes de los inits que se retiran. Se dejan SIEMPRE: runit-*, init,
 # initscripts y sysv-rc (runit los usa al arrancar), init-diversity-tools
@@ -78,9 +83,9 @@ INIT_PKG_REGEX='^(sysvinit-init-antix|dinit|dinit-.*|s6-rc|s6-rc-.*|s6-66-.*|66|
 
 desktop_pkgs() {
     case "$1" in
-        LXDE) echo $PKGS_BASE $PKGS_LXDE $PKGS_APPS ;;
-        LXQT) echo $PKGS_BASE $PKGS_LXQT $PKGS_APPS ;;
-        FLUXBOX) echo $PKGS_BASE $PKGS_FLUXBOX $PKGS_APPS ;;
+        LXDE) echo $PKGS_BASE $PKGS_LXDE $PKGS_APPS $PKGS_YOUTUBE ;;
+        LXQT) echo $PKGS_BASE $PKGS_LXQT $PKGS_APPS $PKGS_YOUTUBE ;;
+        FLUXBOX) echo $PKGS_BASE $PKGS_FLUXBOX $PKGS_APPS $PKGS_YOUTUBE ;;
     esac
 }
 
@@ -449,10 +454,10 @@ setup_network() {
 }
 
 # ------------------------------------------------------------------------------
-# 6b. Impresoras, Bluetooth y YouTube
+# 6b. Impresoras y Bluetooth
 # ------------------------------------------------------------------------------
 setup_services() {
-    log_info "== Impresoras, Bluetooth y videos =="
+    log_info "== Impresoras y Bluetooth =="
     # runit no arranca estos servicios por su cuenta: se crean si faltan.
     if [ -x /usr/sbin/cupsd ]; then
         ensure_runit_service cups "/usr/sbin/cupsd -f" no
@@ -468,17 +473,176 @@ setup_services() {
     else
         log_warn "Bluetooth no se instalo."
     fi
-    # Videos de YouTube en calidad baja (480p): fluidos en equipos viejos.
-    # Se abren con: mpv <enlace de YouTube>
-    if is_installed mpv; then
-        mkdir -p /etc/mpv
-        if ! grep -q '^ytdl-format=' /etc/mpv/mpv.conf 2>/dev/null; then
-            printf '%s\n' '# antix-desktop-postinstall: YouTube en 480p como maximo' \
-                'ytdl-format=bestvideo[height<=480]+bestaudio/best[height<=480]/best' \
-                >> /etc/mpv/mpv.conf
-            log_ok "mpv: YouTube limitado a 480p para que no se trabe."
+}
+
+# ------------------------------------------------------------------------------
+# 6b2. YouTube ligero (el mismo de Lazaro Linux)
+# ------------------------------------------------------------------------------
+# Se busca con gtk-pipe-viewer y se ve en mpv, sin navegador: en un equipo
+# viejo es mucho mas liviano que YouTube en Firefox. Limita a 480p (360p con
+# un solo nucleo), H.264 y 30 cuadros: lo que un procesador viejo decodifica
+# sin trabarse.
+# Debian no trae gtk-pipe-viewer y su yt-dlp envejece rapido (YouTube cambia
+# seguido), asi que se descargan de sus paginas oficiales:
+#   - yt-dlp oficial (incluye yt-dlp-ejs); se actualiza solo cada semana.
+#   - QuickJS-NG: motor de JavaScript liviano (2,5 MB) que yt-dlp necesita
+#     para los desafios de YouTube. Hay version de 32 y de 64 bits.
+#   - gtk-pipe-viewer (programa en Perl; sus piezas vienen de Debian).
+# Las versiones de QuickJS-NG y pipe-viewer estan fijas y se comprueban con
+# su huella (sha256): si la descarga no coincide, no se instala.
+QJS_VERSION="v0.18.0"
+QJS_SHA_X86="6e4e46849f6450a0afc572b8d10a0178d70040314f39669ca98ca8e95f114648"
+QJS_SHA_X64="85ded23b9fabe8c1644fc40a8d2bbdd71157affcbd807359c618cc717ee24d7d"
+PV_VERSION="0.5.9"
+PV_SHA=""
+
+download_checked() {
+    url="$1"; dest="$2"; sha="$3"
+    if ! curl -fsSL --retry 3 -o "$dest" "$url" >>"$LOG_FILE" 2>&1; then
+        log_warn "No se pudo descargar $url"
+        return 1
+    fi
+    if [ -n "$sha" ] && [ "$(sha256sum "$dest" | cut -d' ' -f1)" != "$sha" ]; then
+        log_warn "La descarga de $url no coincide con su huella: no se usa."
+        rm -f "$dest"
+        return 1
+    fi
+}
+
+setup_youtube() {
+    log_info "== YouTube ligero =="
+    tmp="$(mktemp -d)"
+    yt_alto=480
+    [ "$(nproc 2>/dev/null || echo 2)" -gt 1 ] || yt_alto=360
+
+    # yt-dlp oficial: el archivo "yt-dlp" funciona en 32 y 64 bits (Python).
+    if [ ! -x /usr/local/bin/yt-dlp ]; then
+        if download_checked "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" "$tmp/yt-dlp" "" \
+           && download_checked "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS" "$tmp/sums" ""; then
+            want="$(awk '$2=="yt-dlp"{print $1}' "$tmp/sums")"
+            if [ -n "$want" ] && [ "$(sha256sum "$tmp/yt-dlp" | cut -d' ' -f1)" = "$want" ]; then
+                install -m 755 "$tmp/yt-dlp" /usr/local/bin/yt-dlp
+                log_ok "yt-dlp oficial instalado."
+            else
+                log_warn "yt-dlp no coincide con su huella: no se instala."
+            fi
         fi
     fi
+    # Se actualiza solo cada semana (anacron lo hace aunque el equipo no
+    # este encendido justo ese dia).
+    if [ -d /etc/cron.weekly ]; then
+        printf '#!/bin/sh\n# antix-desktop-postinstall: mantener yt-dlp al dia (YouTube cambia seguido).\n[ -x /usr/local/bin/yt-dlp ] && /usr/local/bin/yt-dlp -U >/dev/null 2>&1\ntrue\n' \
+            > /etc/cron.weekly/antix-yt-dlp
+        chmod 755 /etc/cron.weekly/antix-yt-dlp
+    fi
+
+    # QuickJS-NG segun la arquitectura.
+    if [ ! -x /usr/local/bin/qjs ]; then
+        case "$(dpkg --print-architecture)" in
+            i386) qf=qjs-linux-x86; qs="$QJS_SHA_X86" ;;
+            amd64) qf=qjs-linux-x86_64; qs="$QJS_SHA_X64" ;;
+            *) qf="" ;;
+        esac
+        if [ -n "$qf" ] && download_checked "https://github.com/quickjs-ng/quickjs/releases/download/$QJS_VERSION/$qf" "$tmp/qjs" "$qs"; then
+            install -m 755 "$tmp/qjs" /usr/local/bin/qjs
+            log_ok "QuickJS-NG $QJS_VERSION instalado."
+        fi
+    fi
+    if [ ! -e /etc/yt-dlp.conf ]; then
+        cat > /etc/yt-dlp.conf <<'YTDLP'
+# yt-dlp para todo el sistema (lo usan mpv y gtk-pipe-viewer).
+# Motor de JavaScript para los desafios de YouTube: QuickJS-NG, el mas liviano.
+--js-runtimes quickjs:/usr/local/bin/qjs
+YTDLP
+    elif ! grep -q -e '--js-runtimes' /etc/yt-dlp.conf; then
+        printf '%s\n' '--js-runtimes quickjs:/usr/local/bin/qjs' >> /etc/yt-dlp.conf
+    fi
+
+    # gtk-pipe-viewer: se instala en /usr/local con el instalador de Perl.
+    if ! command -v gtk-pipe-viewer >/dev/null 2>&1; then
+        if download_checked "https://codeload.github.com/trizen/pipe-viewer/tar.gz/refs/tags/$PV_VERSION" "$tmp/pv.tgz" "$PV_SHA" \
+           && tar -xzf "$tmp/pv.tgz" -C "$tmp" \
+           && ( cd "$tmp/pipe-viewer-$PV_VERSION" && perl Build.PL --gtk3 && ./Build && ./Build install ) >>"$LOG_FILE" 2>&1; then
+            log_ok "gtk-pipe-viewer $PV_VERSION instalado."
+        else
+            log_warn "No se pudo instalar gtk-pipe-viewer (detalle en $LOG_FILE)."
+        fi
+    fi
+    rm -rf "$tmp"
+
+    mkdir -p /etc/mpv
+    if ! grep -q '^ytdl-format=' /etc/mpv/mpv.conf 2>/dev/null; then
+        cat >> /etc/mpv/mpv.conf <<'MPV'
+# antix-desktop-postinstall: mpv pensado para equipos viejos.
+# Videos de internet (YouTube y otros): hasta 480p, H.264 (avc1) y 30
+# cuadros, con audio AAC; si no hay, lo mas parecido hasta 480p; si no hay
+# nada hasta 480p, la calidad mas baja (nunca la mas alta).
+ytdl-format=bestvideo[height<=?480][vcodec^=avc1][fps<=30]+bestaudio[acodec^=mp4a]/best[height<=?480][vcodec^=avc1][fps<=?30]/best[height<=?480][vcodec^=avc1]/best[height<=?480]/worst
+# Decodificar con la grafica si puede; si no, con el procesador.
+hwdec=auto-safe
+# Memoria para el video ya descargado: unos minutos de 480p.
+cache=yes
+demuxer-max-bytes=50MiB
+demuxer-max-back-bytes=10MiB
+MPV
+        [ "$yt_alto" = 480 ] || sed -i "/^ytdl-format=/s/480/$yt_alto/g" /etc/mpv/mpv.conf
+    fi
+
+    if ! command -v gtk-pipe-viewer >/dev/null 2>&1; then
+        log_warn "YouTube ligero incompleto: los videos se pueden abrir con 'mpv <enlace>'."
+        return 0
+    fi
+    for base in /etc/skel ${TARGET_HOME:+"$TARGET_HOME"}; do
+        mkdir -p "$base/.config/pipe-viewer"
+        for pv in gtk-pipe-viewer pipe-viewer; do
+            f="$base/.config/pipe-viewer/$pv.conf"
+            [ -e "$f" ] && continue
+            cat > "$f" <<PIPEVIEWER
+#!/usr/bin/perl
+# antix-desktop-postinstall: solo las opciones que cambian; las demas
+# las agrega pipe-viewer con su valor por defecto.
+use utf8;
+our \$CONFIG = {
+  video_player_selected => "mpv",
+  # Para 360p: "360".
+  resolution            => "$yt_alto",
+  prefer_mp4            => 1,
+  prefer_m4a            => 1,
+  ignore_av1            => 1,
+  hfr                   => 0,
+  ytdl_cmd              => "/usr/local/bin/yt-dlp",
+  srt_languages         => ["es", "en"],
+};
+PIPEVIEWER
+        done
+    done
+    [ -n "$TARGET_HOME" ] && chown -R "$TARGET_USER": "$TARGET_HOME/.config/pipe-viewer"
+
+    # En el menu aparece como "YouTube".
+    mkdir -p /usr/local/share/applications
+    cat > /usr/local/share/applications/antix-youtube.desktop <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=YouTube
+GenericName=Videos de YouTube
+Comment=Search and watch YouTube videos without a web browser
+Comment[es]=Buscar y ver videos de YouTube sin navegador
+Exec=gtk-pipe-viewer
+Icon=applications-multimedia
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Video;Player;Network;
+Keywords=youtube;video;videos;musica;pipe-viewer;
+DESKTOP
+    for d in /usr/local/share/applications /usr/share/applications; do
+        if [ -f "$d/gtk-pipe-viewer.desktop" ]; then
+            sed '/^\[Desktop Entry\]/a NoDisplay=true' "$d/gtk-pipe-viewer.desktop" \
+                > /usr/local/share/applications/gtk-pipe-viewer.desktop.tmp \
+                && mv /usr/local/share/applications/gtk-pipe-viewer.desktop.tmp /usr/local/share/applications/gtk-pipe-viewer.desktop
+            break
+        fi
+    done
+    log_ok "YouTube ligero listo: menu > YouTube (${yt_alto}p, H.264, QuickJS)."
 }
 
 # ------------------------------------------------------------------------------
@@ -606,6 +770,7 @@ EOF
   [exec] (Hojas de calculo - Calc) {libreoffice --calc}
   [exec] (Presentaciones - Impress) {libreoffice --impress}
   [exec] (Lector de PDF) {atril}
+  [exec] (YouTube) {gtk-pipe-viewer}
   [exec] (Fotos) {gpicview}
   [exec] (Calculadora) {galculator}
   [exec] (Bloc de notas) {mousepad}
@@ -846,6 +1011,7 @@ main() {
     setup_network
     setup_services
     setup_tuning
+    setup_youtube
     setup_desktop_config
     setup_display_manager
     setup_user
@@ -854,4 +1020,5 @@ main() {
     enable_display_manager
 }
 
-main "$@"
+# La prueba automatica carga el script sin ejecutarlo para probar partes.
+[ "${ANTIX_SOLO_FUNCIONES:-0}" = 1 ] || main "$@"

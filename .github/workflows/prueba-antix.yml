@@ -131,3 +131,19 @@ jobs:
             echo "Servicio [$c]:${hay:- NINGUNO}"
           done
           echo "OK"
+
+      - name: YouTube ligero (yt-dlp, QuickJS-NG y gtk-pipe-viewer)
+        run: |
+          echo "Huella de pipe-viewer: $(curl -fsSL https://codeload.github.com/trizen/pipe-viewer/tar.gz/refs/tags/$(grep '^PV_VERSION=' antix-desktop-postinstall.sh | cut -d'"' -f2) | sha256sum | cut -d' ' -f1)"
+          sudo chroot /antix env ANTIX_SOLO_FUNCIONES=1 bash -c '. /root/antix-desktop-postinstall.sh; LOG_FILE=/tmp/youtube.log; TARGET_HOME=""; TARGET_USER=""; setup_youtube' || true
+          sudo tail -n 40 /antix/tmp/youtube.log || true
+          for f in /usr/local/bin/yt-dlp /usr/local/bin/qjs /usr/local/bin/gtk-pipe-viewer /usr/local/bin/pipe-viewer /etc/yt-dlp.conf /etc/mpv/mpv.conf /usr/local/share/applications/antix-youtube.desktop; do
+            test -e "/antix$f" || { echo "::error::Falta $f"; exit 1; }
+          done
+          sudo chroot /antix /usr/local/bin/qjs -e 'print("QuickJS funciona")'
+          sudo chroot /antix /usr/local/bin/yt-dlp --version
+          sudo chroot /antix /usr/local/bin/yt-dlp -v --simulate 2>&1 | grep -iE 'JS runtimes|python|exe versions' || true
+          sudo chroot /antix /usr/local/bin/yt-dlp -v --simulate 2>&1 | grep -iE 'JS runtimes:.*quickjs' || { echo "::error::yt-dlp no ve QuickJS"; exit 1; }
+          sudo chroot /antix perl -MWWW::PipeViewer -e 'print "pipe-viewer $WWW::PipeViewer::VERSION\n"'
+          sudo chroot /antix perl -MGtk3 -e 'print "Gtk3 para Perl OK\n"'
+          echo "OK"
