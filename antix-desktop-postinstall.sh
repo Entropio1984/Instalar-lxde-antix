@@ -19,6 +19,9 @@
 #   - runit no trae servicio para NetworkManager: hay que crearlo.
 #   - dhcpcd y NetworkManager no deben manejar la misma interfaz a la vez.
 #   - LXQt usa Qt 6, que exige un procesador con SSE2: sin SSE2 no se ofrece.
+#   - antiX 26 trae Debian desde Alemania (ftp.de.debian.org): fuera de
+#     Europa la descarga (casi 2 GB) es muy lenta. Antes de instalar, el
+#     script mide varios espejos y usa los mas rapidos.
 #
 # Uso:
 #   sudo ./antix-desktop-postinstall.sh             # menu para elegir escritorio
@@ -27,6 +30,7 @@
 #   sudo ./antix-desktop-postinstall.sh --fluxbox
 #   sudo ./antix-desktop-postinstall.sh --conservar-inits   # no retira inits
 #   sudo ./antix-desktop-postinstall.sh --sin-ajustes  # sin ajustes de rendimiento
+#   sudo ./antix-desktop-postinstall.sh --sin-espejos  # no busca espejos rapidos
 #   ./antix-desktop-postinstall.sh --listar lxde    # solo muestra paquetes
 #
 # Es idempotente: se puede volver a ejecutar sin duplicar cambios.
@@ -44,6 +48,8 @@ FAILED_PKGS=""
 DESKTOP=""
 KEEP_INITS=0
 TUNE=1
+MIRRORS=1
+MIRROR_BACKUP_DIR="/var/backups/antix-desktop-espejos"
 TARGET_USER=""
 TARGET_HOME=""
 
@@ -203,6 +209,7 @@ parse_args() {
             --fluxbox) DESKTOP="FLUXBOX" ;;
             --conservar-inits) KEEP_INITS=1 ;;
             --sin-ajustes) TUNE=0 ;;
+            --sin-espejos) MIRRORS=0 ;;
             --listar)
                 # Solo muestra los paquetes; lo usa la prueba automatica.
                 case "${2:-}" in
@@ -210,7 +217,7 @@ parse_args() {
                     inits) echo "$INIT_PKG_REGEX"; exit 0 ;;
                     *) echo "Uso: --listar lxde|lxqt|fluxbox|inits" >&2; exit 1 ;;
                 esac ;;
-            -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+            -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
             *) echo "Opcion desconocida: $1 (usa --help)" >&2; exit 1 ;;
         esac
         shift
@@ -251,6 +258,197 @@ check_environment() {
     else
         TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
         log_ok "Usuario detectado: $TARGET_USER ($TARGET_HOME)"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 1b. Espejos mas rapidos (de donde se descargan los paquetes)
+# ------------------------------------------------------------------------------
+# antiX 26 viene apuntando a ftp.de.debian.org (Alemania) para Debian y a
+# repo.antixlinux.com para antiX. Desde America del Sur, Africa o Asia eso
+# hace que bajar los ~2 GB del escritorio y los programas tarde horas.
+#
+# Aqui se prueban varios espejos (copias identicas del repositorio en otros
+# paises) y se usa el mas rapido:
+#   1. Se pide a todos a la vez un archivo pequeno y se descartan los que no
+#      responden o tardan mucho.
+#   2. A los 4 mas rapidos en responder se les baja, uno por uno, hasta 2 MB
+#      durante 8 segundos como maximo, y se mide la velocidad real.
+# Solo se cambia si el nuevo es claramente mas rapido (20 % o mas) que el
+# actual. Cambiar de espejo es seguro: apt comprueba la firma de todo lo
+# que baja, venga de donde venga. Si despues de cambiar "apt-get update"
+# da errores, se vuelve a la configuracion anterior.
+#
+# Los espejos de antiX salen de la lista que mantiene el propio antiX
+# (localize-repo); los de Debian son deb.debian.org (red mundial), el que
+# localize-repo sugiere para la zona horaria del equipo y algunos grandes.
+DEBIAN_MIRROR_CODES="us br cl mx es de fr nl uk"
+
+# Imprime "URL SUITE" de la primera linea "deb" activa del archivo $1 cuyo
+# URL cumple la expresion $2.
+apt_line_url() {
+    awk -v re="$2" '
+        $1 != "deb" { next }
+        { i = 2
+          if ($i ~ /^\[/) { while (i <= NF && $i !~ /\]$/) i++; i++ }
+          if ($i ~ re) { print $i, $(i + 1); exit } }' "$1" 2>/dev/null
+}
+
+# Archivos de fuentes de apt (formato de una linea).
+apt_source_files() {
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+        [ -f "$f" ] && echo "$f"
+    done
+}
+
+# Segundos que tarda en bajar el URL $1 (vacio si falla).
+mirror_latency() {
+    curl -fsS -o /dev/null --connect-timeout 3 --max-time 6 -w '%{time_total}' "$1" 2>/dev/null
+}
+
+# Velocidad en KB/s bajando hasta 2 MB del URL $1 en 8 s como maximo.
+mirror_speed() {
+    v="$(curl -sS -o /dev/null -r 0-2097151 --connect-timeout 4 --max-time 8 \
+            -w '%{http_code} %{speed_download}' "$1" 2>/dev/null)"
+    case "$v" in
+        200\ *|206\ *) echo "${v#* }" | awk '{ printf "%d", $1 / 1024 }' ;;
+        *) echo 0 ;;
+    esac
+}
+
+# Elige el mejor espejo. Entrada (stdin): lineas "BASE URL_DE_PRUEBA".
+# $1 = modo: "latencia" (solo tiempo de respuesta) o "velocidad".
+# Imprime "BASE VALOR" del mejor (VALOR en s o en KB/s), o nada.
+pick_mirror() {
+    modo="$1"
+    tmp="$(mktemp)"
+    while read -r base url; do
+        [ -n "$base" ] || continue
+        ( t="$(mirror_latency "$url")" && [ -n "$t" ] && echo "$t $base $url" >>"$tmp" ) &
+    done
+    wait
+    if [ "$modo" = "latencia" ]; then
+        sort -n "$tmp" | awk 'NR==1 { print $2, $1 }'
+    else
+        sort -n "$tmp" | head -n 4 | while read -r _t base url; do
+            echo "$(mirror_speed "$url") $base"
+        done | sort -rn | awk '$1 > 0 { print $2, $1; exit }'
+    fi
+    rm -f "$tmp"
+}
+
+# Reemplaza el URL $1 por $2 en las lineas "deb" de todos los archivos de
+# fuentes (solo el URL exacto; nada mas cambia).
+replace_apt_url() {
+    old_re="$(printf '%s' "$1" | sed 's/[.[\*^$]/\\&/g')"
+    for f in $(apt_source_files); do
+        grep -qE "^deb[[:space:]](.*[[:space:]])?$old_re/?[[:space:]]" "$f" || continue
+        sed -i -E "/^deb /s#([[:space:]])$old_re/?([[:space:]])#\\1$2\\2#" "$f"
+    done
+}
+
+# Paso completo: mide, cambia si conviene y comprueba con apt-get update.
+choose_fast_mirrors() {
+    [ "$MIRRORS" = 1 ] || { log_info "Se omite la busqueda de espejos (--sin-espejos)."; return 0; }
+    command -v curl >/dev/null 2>&1 || { log_warn "No esta curl: se dejan los espejos de siempre."; return 0; }
+    log_info "Buscando los espejos mas rapidos para descargar (tarda menos de un minuto)..."
+
+    arch="$(dpkg --print-architecture)"
+    # Copia de las fuentes antes de tocarlas. La de la primera vez se
+    # guarda aparte ("original") y nunca se sobrescribe.
+    mkdir -p "$MIRROR_BACKUP_DIR"
+    for f in $(apt_source_files); do cp -a "$f" "$MIRROR_BACKUP_DIR/"; done
+    if [ ! -d "$MIRROR_BACKUP_DIR/original" ]; then
+        mkdir -p "$MIRROR_BACKUP_DIR/original"
+        for f in $(apt_source_files); do cp -a "$f" "$MIRROR_BACKUP_DIR/original/"; done
+    fi
+    changed=0
+
+    # --- Debian ---
+    deb_cur=""; deb_suite=""
+    for f in $(apt_source_files); do
+        read -r deb_cur deb_suite <<EOF_DEB
+$(apt_line_url "$f" '^https?://(deb|ftp\.[a-z][a-z])\.debian\.org/debian/?$')
+EOF_DEB
+        case "$deb_suite" in *-*|"") deb_cur=""; continue ;; esac
+        break
+    done
+    if [ -n "$deb_cur" ]; then
+        deb_cur="${deb_cur%/}"
+        codes="$DEBIAN_MIRROR_CODES"
+        if [ -x /usr/sbin/localize-repo ]; then
+            zona="$(/usr/sbin/localize-repo -c default 2>/dev/null | awk '/Deb code:/ { print $3 }')"
+            [ -n "$zona" ] && codes="$zona $codes"
+        fi
+        cands="$deb_cur http://deb.debian.org/debian"
+        for c in $codes; do cands="$cands http://ftp.$c.debian.org/debian"; done
+        best="$(for b in $(echo $cands | tr ' ' '\n' | awk '!v[$0]++'); do
+                    echo "$b $b/dists/$deb_suite/main/binary-$arch/Packages.xz"
+                done | pick_mirror velocidad)"
+        cur_speed="$(mirror_speed "$deb_cur/dists/$deb_suite/main/binary-$arch/Packages.xz")"
+        best_url="${best% *}"; best_speed="${best#* }"
+        if [ -z "$best" ]; then
+            log_warn "No se pudo medir ningun espejo de Debian (¿sin internet?): se deja $deb_cur."
+        elif [ "$best_url" != "$deb_cur" ] && [ "$best_speed" -gt $((cur_speed * 12 / 10)) ]; then
+            log_ok "Debian: $best_url ($best_speed KB/s) en lugar de $deb_cur ($cur_speed KB/s)."
+            for u in $(for f in $(apt_source_files); do
+                           awk '$1=="deb"' "$f" | grep -oE 'https?://(deb|ftp\.[a-z][a-z])\.debian\.org/debian/?' 
+                       done | sed 's#/$##' | sort -u); do
+                replace_apt_url "$u" "$best_url"
+            done
+            changed=1
+        else
+            log_ok "Debian: el espejo actual ($deb_cur, $cur_speed KB/s) es el mas rapido."
+        fi
+    fi
+
+    # --- antiX ---
+    ax_file=/etc/apt/sources.list.d/antix.list
+    read -r ax_cur ax_suite <<EOF_AX
+$(apt_line_url "$ax_file" '^https?://')
+EOF_AX
+    if [ -n "${ax_cur:-}" ] && [ -n "${ax_suite:-}" ] && [ "${ax_cur%/$ax_suite}" != "$ax_cur" ]; then
+        ax_cands="${ax_cur%/$ax_suite}"
+        if [ -r /usr/sbin/localize-repo ]; then
+            ax_cands="$ax_cands $(sed -n 's/^[a-z0-9_]*_AX_HOST=//p' /usr/sbin/localize-repo | tr -d '"' | awk '{print $1}')"
+        fi
+        ax_cur_base="${ax_cur%/$ax_suite}"
+        best="$(for b in $(echo $ax_cands | tr ' ' '\n' | sed 's#/$##' | awk 'NF && !v[$0]++'); do
+                    echo "$b $b/$ax_suite/dists/$ax_suite/Release"
+                done | pick_mirror latencia)"
+        cur_t="$(mirror_latency "$ax_cur/dists/$ax_suite/Release")"
+        best_base="${best% *}"; best_t="${best#* }"
+        if [ -z "$best" ]; then
+            log_warn "No se pudo medir ningun espejo de antiX: se deja $ax_cur."
+        elif [ "$best_base" != "$ax_cur_base" ] && \
+             { [ -z "$cur_t" ] || awk -v n="$best_t" -v a="$cur_t" 'BEGIN { exit !(n < a * 0.8) }'; }; then
+            log_ok "antiX: $best_base/$ax_suite (${best_t} s) en lugar de $ax_cur (${cur_t:-sin respuesta} s)."
+            replace_apt_url "$ax_cur" "$best_base/$ax_suite"
+            changed=1
+        else
+            log_ok "antiX: el espejo actual ($ax_cur) es el mas rapido."
+        fi
+    fi
+
+    # Reintentos: con internet lento o inestable, apt reintenta cada
+    # descarga en vez de rendirse al primer corte.
+    printf 'Acquire::Retries "5";\n' >/etc/apt/apt.conf.d/80antix-desktop-reintentos
+
+    [ "$changed" = 1 ] || return 0
+    log_info "Comprobando los espejos nuevos..."
+    if apt-get update >"$MIRROR_BACKUP_DIR/update.log" 2>&1 \
+       && ! grep -qE '^(E:|Err:|W: Failed)' "$MIRROR_BACKUP_DIR/update.log"; then
+        log_ok "Espejos nuevos funcionando. Copia de los anteriores en $MIRROR_BACKUP_DIR."
+    else
+        cat "$MIRROR_BACKUP_DIR/update.log" >>"$LOG_FILE"
+        log_warn "Los espejos nuevos dieron errores: se vuelve a los anteriores."
+        for f in "$MIRROR_BACKUP_DIR"/*.list; do
+            [ -f "$f" ] || continue
+            case "$(basename "$f")" in
+                sources.list) cp -a "$f" /etc/apt/sources.list ;;
+                *) cp -a "$f" /etc/apt/sources.list.d/ ;;
+            esac
+        done
     fi
 }
 
@@ -1142,6 +1340,7 @@ enable_display_manager() {
 main() {
     parse_args "$@"
     check_environment
+    choose_fast_mirrors
     log_info "Actualizando indices de paquetes..."
     apt-get update >>"$LOG_FILE" 2>&1 || log_warn "apt-get update tuvo errores (detalle en $LOG_FILE)."
     choose_desktop

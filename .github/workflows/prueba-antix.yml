@@ -73,6 +73,21 @@ jobs:
           sudo chroot /antix dpkg --print-architecture
           sudo chroot /antix apt-get update -q
 
+      - name: Elegir los espejos mas rapidos
+        run: |
+          inicio=$(date +%s)
+          sudo chroot /antix env ANTIX_SOLO_FUNCIONES=1 bash -c '. /root/antix-desktop-postinstall.sh; LOG_FILE=/tmp/espejos.log; choose_fast_mirrors'
+          echo "Tardo $(( $(date +%s) - inicio )) s."
+          echo "--- Fuentes de apt despues:"; sudo chroot /antix sh -c 'grep -h "^deb " /etc/apt/sources.list.d/*.list'
+          echo "--- Registro:"; sudo cat /antix/tmp/espejos.log
+          test -f /antix/etc/apt/apt.conf.d/80antix-desktop-reintentos || { echo "::error::Falta la configuracion de reintentos"; exit 1; }
+          test -d /antix/var/backups/antix-desktop-espejos/original || { echo "::error::Falta la copia original de las fuentes"; exit 1; }
+          sudo chroot /antix grep -q "security.debian.org" /etc/apt/sources.list.d/debian.list || { echo "::error::Se perdio security.debian.org"; exit 1; }
+          # Los paquetes de los pasos siguientes se bajan de los espejos elegidos.
+          sudo chroot /antix apt-get update -q 2>&1 | tee update.log
+          if grep -qE '^(E:|Err:)' update.log; then echo "::error::apt-get update fallo con los espejos elegidos"; exit 1; fi
+          { echo "### Espejos (antiX ${{ matrix.arch }})"; sudo grep -E '\[(OK|WARN)\]' /antix/tmp/espejos.log | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Servicios de runit que ofrece antiX (informativo)
         run: |
           sudo chroot /antix apt-cache search --names-only '^runit-service-' | sort
