@@ -52,6 +52,23 @@ sudo ./antix-desktop-postinstall.sh --fluxbox
 sudo ./antix-desktop-postinstall.sh --lxqt
 ```
 
+## Descargas más rápidas (espejos)
+
+antiX 26 viene configurado para descargar los paquetes de Debian desde Alemania. Desde América Latina eso hace que bajar el escritorio y los programas (casi 2 GB) tarde horas.
+
+Por eso, antes de instalar nada, el script busca el **espejo más rápido**. Un espejo es una copia idéntica del repositorio de paquetes, alojada en otro país:
+
+1. Pregunta a la vez a varios espejos de Debian y de antiX, y descarta los que no responden o tardan mucho.
+2. A los cuatro más rápidos les baja un pedazo de archivo y mide la velocidad real desde tu conexión.
+3. Solo cambia si el nuevo es claramente más rápido (20 % o más) que el que ya tenías.
+
+Toma menos de un minuto. Es seguro: apt revisa la firma de cada paquete, venga del espejo que venga. Si después del cambio algo falla, el script vuelve solo a la configuración anterior. Además, apt queda configurado para reintentar las descargas que se cortan, en vez de rendirse.
+
+La lista de espejos de antiX sale de la que mantiene el propio antiX; para Debian prueba la red mundial `deb.debian.org`, el espejo que antiX sugiere para tu zona horaria y algunos grandes (Estados Unidos, Brasil, Chile, México, España...).
+
+- Copia de las fuentes originales: `/var/backups/antix-desktop-espejos/original/`. Para volver a ellas, cópialas a `/etc/apt/sources.list.d/` y ejecuta `sudo apt-get update`.
+- Para no buscar espejos: `--sin-espejos`.
+
 Se puede volver a ejecutar sin problema; no duplica nada. Todo lo que hace queda anotado en `/var/log/antix-desktop-postinstall.log`.
 
 ## Ajustes para equipos viejos
