@@ -7,6 +7,9 @@
 #   - Deja runit como UNICO init: retira sysVinit, dinit, s6-rc y s6-66 y
 #     sus entradas del menu de arranque (GRUB).
 #   - Instala un escritorio liviano a eleccion: LXDE, LXQt o Fluxbox.
+#   - O, en antiX Full, deja el IceWM que ya trae y quita lo innecesario
+#     (otros escritorios, herramientas de la sesion live, programas para
+#     usuarios avanzados, idiomas y firmware que no se usan). Sin internet.
 #   - Instala solo lo necesario: explorador de archivos, Firefox ESR,
 #     LibreOffice (Writer, Calc, Impress), lector de PDF, impresora y
 #     escaner, visor de fotos, videos y YouTube (mpv), Bluetooth,
@@ -28,6 +31,7 @@
 #   sudo ./antix-desktop-postinstall.sh --lxde      # sin menu
 #   sudo ./antix-desktop-postinstall.sh --lxqt
 #   sudo ./antix-desktop-postinstall.sh --fluxbox
+#   sudo ./antix-desktop-postinstall.sh --limpiar   # antiX Full: deja IceWM
 #   sudo ./antix-desktop-postinstall.sh --conservar-inits   # no retira inits
 #   sudo ./antix-desktop-postinstall.sh --sin-ajustes  # sin ajustes de rendimiento
 #   sudo ./antix-desktop-postinstall.sh --sin-espejos  # no busca espejos rapidos
@@ -207,6 +211,7 @@ parse_args() {
             --lxde) DESKTOP="LXDE" ;;
             --lxqt) DESKTOP="LXQT" ;;
             --fluxbox) DESKTOP="FLUXBOX" ;;
+            --limpiar) DESKTOP="LIMPIAR" ;;
             --conservar-inits) KEEP_INITS=1 ;;
             --sin-ajustes) TUNE=0 ;;
             --sin-espejos) MIRRORS=0 ;;
@@ -217,7 +222,7 @@ parse_args() {
                     inits) echo "$INIT_PKG_REGEX"; exit 0 ;;
                     *) echo "Uso: --listar lxde|lxqt|fluxbox|inits" >&2; exit 1 ;;
                 esac ;;
-            -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+            -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
             *) echo "Opcion desconocida: $1 (usa --help)" >&2; exit 1 ;;
         esac
         shift
@@ -453,6 +458,261 @@ EOF_AX
 }
 
 # ------------------------------------------------------------------------------
+# 1c. Limpiar antiX Full y dejar IceWM (--limpiar). No necesita internet.
+# ------------------------------------------------------------------------------
+# antiX Full ya trae IceWM, Firefox, LibreOffice y casi todo lo necesario,
+# pero tambien otros 3 escritorios, herramientas de la sesion live,
+# programas para usuarios avanzados, idiomas que nadie del equipo usa y
+# firmware de servidores y celulares. Quitar paquetes no descarga nada:
+# todo esto funciona sin conexion.
+#
+# Se QUEDA: IceWM (y sus variantes zzz/rox), Firefox, LibreOffice (Writer,
+# Calc, Impress, Draw), Evince (PDF), Celluloid y mpv (videos y YouTube),
+# XMMS (musica), Mirage (fotos), Transmission (torrents), Xfburn (grabar
+# discos), gparted, synaptic, el centro de control y las herramientas de
+# antiX, impresoras, escaner, bluetooth, wifi y el firmware de equipos
+# comunes (wifi, video, sonido).
+CLEAN_DESKTOPS="fluxbox fluxbox-themes-antix fluxbox-base-themes-antix
+ desktop-defaults-fluxbox-antix jwm desktop-defaults-jwm-antix herbstluftwm
+ desktop-defaults-hlwm-antix dzen2"
+# Solo sirven en la sesion live (instalar, rehacer la ISO, persistencia).
+CLEAN_LIVE="iso-snapshot remaster-antix live-kernel-updater antix-installer
+ gazelle-installer-data-antix cli-installer-antix"
+CLEAN_APPS="claws-mail claws-mail-i18n claws-mail-pdf-viewer
+ claws-mail-pgpinline claws-mail-pgpmime claws-mail-smime-plugin
+ claws-mail-tools hexchat irssi irssi-plugin-otr irssi-scripts gftp-gtk
+ gftp-common droopy-antix cherrytree geany geany-common meld dosbox
+ gnome-mahjongg xine-ui xine-skins-antix winff asunder cdw gtkam
+ luckybackup grsync gnome-ppp sakis3g modem-manager-gui pppoeconf elinks
+ mtpaint mupdf libreoffice-math antix-viewer f3-qt f3"
+# Efectos de sonido para musicos (el ecualizador de antiX va con ellos).
+CLEAN_AUDIO="calf-plugins zam-plugins lsp-plugins-lv2 easyeffects
+ antix-acoustic-colours antix-equaliser-toggle"
+# Firmware de tarjetas de red de servidores y de celulares/tabletas ARM:
+# no existen en un portatil o PC de escritorio.
+CLEAN_FIRMWARE="firmware-netronome firmware-marvell-prestera firmware-qcom-dsp
+ firmware-qcom-soc firmware-qcom-media firmware-cavium firmware-qlogic
+ firmware-myricom firmware-netxen firmware-bnx2x firmware-samsung"
+# Compiladores: solo hacen falta para el wifi Broadcom "wl", que se
+# compila en el equipo. Si ese wifi esta en uso, se dejan.
+CLEAN_DEV="broadcom-sta-dkms dkms libdvd-pkg build-essential debhelper
+ dh-autoreconf dpkg-dev g++ g++-14 gcc gcc-14 libtool libstdc++-14-dev
+ libc6-dev qt6-base-dev qmake6 libgl-dev libglx-dev libvulkan-dev
+ libx11-dev libxine2-dev xutils-dev"
+# Sesiones de inicio de los escritorios retirados que quedan en paquetes
+# que se conservan (zzz-fluxbox, rox-jwm...): dpkg no las vuelve a poner.
+CLEAN_DPKG_EXCLUDE=/etc/dpkg/dpkg.cfg.d/antix-desktop-limpieza
+
+is_antix_full() {
+    is_installed icewm && is_installed desktop-defaults-icewm-antix \
+        && is_installed firefox-esr && is_installed libreoffice-writer
+}
+
+# Idioma del sistema (es, pt, en...) segun /etc/default/locale.
+system_language() {
+    l="$(sed -n 's/^LANG=//p' /etc/default/locale 2>/dev/null | tr -d '"' | head -n1)"
+    [ -n "$l" ] || l="${LANG:-en_US.UTF-8}"
+    echo "$l"
+}
+
+# Paquetes de idioma (Firefox, LibreOffice, diccionarios) que no son del
+# idioma del sistema ni ingles.
+foreign_language_pkgs() {
+    lang="$(system_language)"; lang="${lang%%_*}"; lang="${lang%%.*}"
+    dpkg-query -W -f='${Package} ${Status}\n' 2>/dev/null \
+        | awk '$NF=="installed"{print $1}' \
+        | grep -E '^(firefox-esr-l10n|libreoffice-l10n|libreoffice-help|hunspell|hyphen|mythes)-' \
+        | grep -vE -- "-${lang}(-|$)" \
+        | grep -vE -- '-en-us$' || true
+}
+
+# Reemplaza locales-all (230 MB con todos los idiomas del mundo) por solo
+# el idioma del sistema y el ingles.
+reduce_locales() {
+    is_installed locales-all || return 0
+    is_installed locales || { log_warn "Falta el paquete 'locales': se deja locales-all."; return 0; }
+    loc="$(system_language)"
+    case "$loc" in *.UTF-8|*.utf8) ;; *) loc="${loc%%.*}.UTF-8" ;; esac
+    backup_file /etc/locale.gen
+    for l in "$loc" en_US.UTF-8; do
+        if grep -q "^# *$l UTF-8" /etc/locale.gen 2>/dev/null; then
+            sed -i "s/^# *$l UTF-8/$l UTF-8/" /etc/locale.gen
+        elif ! grep -q "^$l UTF-8" /etc/locale.gen 2>/dev/null; then
+            echo "$l UTF-8" >> /etc/locale.gen
+        fi
+    done
+    if locale-gen >>"$LOG_FILE" 2>&1 && locale -a 2>/dev/null | grep -qi "^${loc%%.*}\.utf-\?8$"; then
+        if DEBIAN_FRONTEND=noninteractive apt-get purge -y locales-all >>"$LOG_FILE" 2>&1; then
+            log_ok "Idiomas: se deja solo $(echo "$loc en_US.UTF-8" | tr ' ' '\n' | sort -u | tr '\n' ' ')(locales-all retirado)."
+        else
+            log_warn "No se pudo retirar locales-all (detalle en $LOG_FILE)."
+        fi
+    else
+        log_warn "No se pudo generar $loc: se deja locales-all."
+    fi
+}
+
+# Retira los paquetes de la lista que esten instalados. Antes simula: si
+# apt quisiera quitar algo de la lista de los que SIEMPRE se quedan, no se
+# toca nada de ese grupo.
+CLEAN_PROTECTED='^(icewm|icewm-common|desktop-defaults-icewm-antix|desktop-defaults-antix|desktop-defaults-zzzfm-antix|desktop-session-antix|desktop-menu-antix|antix26-desktop-files|zzzfm|rox-filer|roxterm-gtk2|rxvt-unicode|firefox-esr|libreoffice-writer|libreoffice-calc|libreoffice-impress|evince|celluloid|mpv|xmms|mirage|leafpad|control-centre-antix|connman|cmst|ceni|wpasupplicant|slimski|xserver-xorg|xorg|cups|simple-scan|blueman|runit|runit-init-antix|sudo|apt|dpkg|locales|linux-image-.*|firmware-linux-nonfree|firmware-iwlwifi|firmware-atheros|firmware-realtek|firmware-misc-nonfree|firmware-amd-graphics|firmware-intel-graphics|firmware-brcm80211|antix-memory-manager|packageinstaller|synaptic|gparted)$'
+
+purge_group() {
+    title="$1"; shift
+    pkgs=""
+    for p in "$@"; do is_installed "$p" && pkgs="$pkgs $p"; done
+    [ -n "$pkgs" ] || { log_ok "$title: nada que quitar."; return 0; }
+    # shellcheck disable=SC2086
+    bad="$(apt-get -s purge $pkgs 2>/dev/null | awk '/^(Remv|Purg) /{print $2}' \
+           | sed 's/:.*//' | grep -E "$CLEAN_PROTECTED" || true)"
+    if [ -n "$bad" ]; then
+        log_warn "$title: no se quita nada porque tambien se iria: $(echo $bad)"
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    if DEBIAN_FRONTEND=noninteractive apt-get purge -y $pkgs >>"$LOG_FILE" 2>&1; then
+        log_ok "$title: retirados $(echo "$pkgs" | wc -w) paquetes."
+    else
+        log_warn "$title: apt dio un error (detalle en $LOG_FILE); se intenta uno por uno."
+        for p in $pkgs; do
+            DEBIAN_FRONTEND=noninteractive apt-get purge -y "$p" >>"$LOG_FILE" 2>&1 \
+                || log_warn "No se pudo quitar '$p'."
+        done
+    fi
+}
+
+# antiX reemplaza los accesos del menu por enlaces propios
+# (antix26-desktop-files). Al quitar un programa su enlace queda roto y
+# el menu mostraria un programa que ya no existe: se retiran esos enlaces.
+fix_menu_links() {
+    # La ayuda de antiX (FAQ, botones "Ayuda" de sus herramientas) se abria
+    # con antix-viewer, que pesa ~150 MB (QtWebEngine). Ahora se abre con
+    # Firefox. Si antix-viewer se vuelve a instalar, se usa ese.
+    if ! is_installed antix-viewer; then
+        cat > /usr/local/bin/antix-viewer <<'VIEWER'
+#!/bin/sh
+# antix-desktop-postinstall --limpiar: abre la ayuda de antiX en Firefox.
+[ -x /usr/bin/antix-viewer ] && exec /usr/bin/antix-viewer "$@"
+exec firefox-esr "$1"
+VIEWER
+        chmod 755 /usr/local/bin/antix-viewer
+        log_ok "La ayuda de antiX se abre ahora con Firefox."
+    fi
+
+    res=/usr/local/lib/antiX/antix26-desktop-files
+    n=0
+    for f in /usr/share/applications/*.desktop; do
+        [ -L "$f" ] || continue
+        k="$(basename "$f")"
+        case "$(readlink "$f")" in "$res/reservoir/"*) ;; *) continue ;; esac
+        # El original del programa lo guarda dpkg en "originale": si ya no
+        # esta, el programa fue desinstalado.
+        if [ ! -e "$res/originale/$k" ] \
+           && dpkg-divert --list "$f" 2>/dev/null | grep -q antix26-desktop-files; then
+            rm -f "$f"
+            dpkg-divert --package antix26-desktop-files --remove "$f" >/dev/null 2>&1
+            n=$((n + 1))
+            continue
+        fi
+        # Accesos que antiX trae para programas que no vienen instalados
+        # (por ejemplo GIMP).
+        e="$(sed -n 's/^Exec=//p' "$f" | head -n1)"; e="${e%% *}"
+        if [ -n "$e" ] && ! command -v "$e" >/dev/null 2>&1; then
+            rm -f "$f"
+            n=$((n + 1))
+        fi
+    done
+    log_ok "Menu: $n accesos de programas retirados."
+
+    # Programas predeterminados (editor, correo...) que ya no existen.
+    for dir in /usr/share/desktop-defaults /etc/skel/.local/share/desktop-defaults \
+               /home/*/.local/share/desktop-defaults; do
+        [ -d "$dir" ] || continue
+        for f in "$dir"/*.desktop; do
+            [ -L "$f" ] && [ ! -e "$f" ] || continue
+            case "$(basename "$f")" in
+                editor.desktop) new=leafpad.desktop ;;
+                email.desktop) new=firefox-esr.desktop ;;
+                image-viewer.desktop) new=mirage.desktop ;;
+                audio-player.desktop) new=xmms.desktop ;;
+                *) continue ;;
+            esac
+            [ -e "/usr/share/applications/$new" ] || continue
+            ln -sfn "/usr/share/applications/$new" "$f"
+            log_ok "Predeterminado: $(basename "$f" .desktop) -> ${new%.desktop} ($dir)"
+        done
+    done
+
+    # Sesiones de los escritorios retirados.
+    {
+        echo '# antix-desktop-postinstall --limpiar: sesiones de escritorios retirados.'
+        for wm in fluxbox jwm herbstluftwm; do
+            command -v "$wm" >/dev/null 2>&1 && continue
+            echo "path-exclude=/usr/share/xsessions/*$wm.desktop"
+        done
+    } > "$CLEAN_DPKG_EXCLUDE"
+    for wm in fluxbox jwm herbstluftwm; do
+        command -v "$wm" >/dev/null 2>&1 && continue
+        rm -f /usr/share/xsessions/*"$wm".desktop
+        for m in /usr/share/desktop-session/wm-menus/*-wm-menu; do
+            [ -f "$m" ] && sed -i "/desktop-session-restart [A-Za-z]*-\{0,1\}$wm\$/Id" "$m"
+        done
+    done
+    log_ok "Inicio de sesion: solo quedan las variantes de IceWM."
+
+    if command -v desktop-menu >/dev/null 2>&1; then
+        if desktop-menu --write-out-global >>"$LOG_FILE" 2>&1; then
+            log_ok "Menu de aplicaciones regenerado."
+        else
+            log_warn "No se pudo regenerar el menu (se arregla con Menu > Refresh Menu)."
+        fi
+    fi
+}
+
+clean_antix_full() {
+    log_info "== Limpieza de antiX Full: se deja IceWM (no necesita internet) =="
+    if ! is_antix_full; then
+        log_error "Esto no parece antiX Full con IceWM (faltan icewm, firefox-esr o libreoffice-writer)."
+        log_error "En antiX Core usa --lxde, --lxqt o --fluxbox."
+        exit 1
+    fi
+    before=$(df -m / | awk 'NR==2{print $3}')
+
+    # shellcheck disable=SC2086
+    purge_group "Otros escritorios (Fluxbox, JWM, herbstluftwm)" $CLEAN_DESKTOPS
+    # shellcheck disable=SC2086
+    purge_group "Herramientas de la sesion live" $CLEAN_LIVE
+    # shellcheck disable=SC2086
+    purge_group "Programas para usuarios avanzados" $CLEAN_APPS
+    # shellcheck disable=SC2086
+    purge_group "Efectos de sonido para musicos" $CLEAN_AUDIO
+    # shellcheck disable=SC2086
+    purge_group "Firmware de servidores y celulares" $CLEAN_FIRMWARE
+    if [ -d /sys/module/wl ]; then
+        log_info "El wifi Broadcom (wl) esta en uso: se dejan los compiladores."
+    else
+        # shellcheck disable=SC2086,SC2046
+        purge_group "Compiladores y archivos de programacion" $CLEAN_DEV \
+            $(dpkg-query -W -f='${Package} ${Status}\n' 'linux-headers-*' 2>/dev/null \
+              | awk '$NF=="installed"{print $1}')
+    fi
+    # shellcheck disable=SC2046
+    purge_group "Idiomas que no se usan ($(system_language))" $(foreign_language_pkgs)
+    reduce_locales
+
+    # Paquetes que quedaron sin uso; la cache de apt en antiX Full suele
+    # estar vacia, pero por si acaso.
+    DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y >>"$LOG_FILE" 2>&1 \
+        || log_warn "apt-get autoremove dio un error (detalle en $LOG_FILE)."
+    apt-get clean >/dev/null 2>&1
+
+    fix_menu_links
+
+    after=$(df -m / | awk 'NR==2{print $3}')
+    log_ok "Espacio liberado: $((before - after)) MB (usado ahora: $after MB)."
+}
+
+# ------------------------------------------------------------------------------
 # 2. Eleccion del escritorio
 # ------------------------------------------------------------------------------
 # Textos sin acentos a proposito: el menu puede aparecer en una consola TTY
@@ -478,18 +738,24 @@ choose_desktop() {
         lxqt_text="LXQt: NO disponible (el procesador no tiene SSE2)"
     fi
 
+    # En antiX Full se ofrece primero limpiar y quedarse con IceWM.
+    full=0; is_antix_full && full=1
+
     if command -v dialog >/dev/null 2>&1; then
-        choice="LXDE"
+        choice="LXDE"; [ "$full" -eq 1 ] && choice="LIMPIAR"
         while :; do
-            st_lxde=off; st_lxqt=off; st_flux=off
+            st_lxde=off; st_lxqt=off; st_flux=off; st_clean=off
             case "$choice" in
-                LXQT) st_lxqt=on ;; FLUXBOX) st_flux=on ;; *) st_lxde=on ;;
+                LXQT) st_lxqt=on ;; FLUXBOX) st_flux=on ;; LIMPIAR) st_clean=on ;; *) st_lxde=on ;;
             esac
+            set --
+            [ "$full" -eq 1 ] && set -- LIMPIAR "IceWM: dejar el de antiX Full y quitar lo innecesario (rapido, sin descargas)" "$st_clean"
             if ! choice="$(dialog --stdout --no-tags \
                     --backtitle "Escritorio para antiX 26 Core" \
                     --title "Escritorio" \
                     --ok-label "Continuar" --cancel-label "Salir" \
                     --radiolist "ESPACIO elige, ENTER continua." 0 0 0 \
+                    "$@" \
                     LXDE "LXDE: liviano y sencillo (recomendado)" "$st_lxde" \
                     FLUXBOX "Fluxbox: el mas liviano, para equipos muy viejos" "$st_flux" \
                     LXQT "$lxqt_text" "$st_lxqt")"; then
@@ -503,8 +769,13 @@ choose_desktop() {
                 continue
             fi
             if [ "$KEEP_INITS" -eq 1 ]; then inits_text="Se conservan los demas inits."; else inits_text="Se retiran sysVinit, dinit, s6-rc y s6-66: solo queda runit."; fi
+            if [ "$choice" = "LIMPIAR" ]; then
+                confirm="Se deja IceWM y se quitan otros escritorios (Fluxbox, JWM), herramientas de la sesion live, programas para usuarios avanzados, idiomas que no se usan y firmware de servidores.\n\nSe quedan Firefox, LibreOffice, lector de PDF, videos, musica, fotos, impresora, wifi y bluetooth.\n\n$inits_text\n\nA partir de aqui el script no hara mas preguntas."
+            else
+                confirm="Se instalara $choice con:\n\n  - Firefox ESR, LibreOffice, lector de PDF\n  - Explorador de archivos y wifi con icono\n  - LightDM (inicio de sesion grafico)\n\n$inits_text\n\nA partir de aqui el script no hara mas preguntas."
+            fi
             if dialog --title "Confirmar" --yes-label "Comenzar" --no-label "Volver" \
-                    --yesno "Se instalara $choice con:\n\n  - Firefox ESR, LibreOffice, lector de PDF\n  - Explorador de archivos y wifi con icono\n  - LightDM (inicio de sesion grafico)\n\n$inits_text\n\nA partir de aqui el script no hara mas preguntas." 0 0; then
+                    --yesno "$confirm" 0 0; then
                 break
             fi
         done
@@ -512,9 +783,12 @@ choose_desktop() {
         DESKTOP="$choice"
     else
         while :; do
-            printf '\nEscritorio a instalar:\n  1) LXDE (recomendado)\n  2) Fluxbox (el mas liviano)\n  3) LXQt\nElige 1, 2 o 3: '
+            printf '\nEscritorio a instalar:\n  1) LXDE (recomendado)\n  2) Fluxbox (el mas liviano)\n  3) LXQt\n'
+            [ "$full" -eq 1 ] && printf '  4) IceWM: dejar el de antiX Full y quitar lo innecesario\n'
+            printf 'Elige un numero: '
             read -r r || exit 1
             case "$r" in
+                4) if [ "$full" -eq 1 ]; then DESKTOP="LIMPIAR"; break; fi ;;
                 1) DESKTOP="LXDE"; break ;;
                 2) DESKTOP="FLUXBOX"; break ;;
                 3) if has_sse2; then DESKTOP="LXQT"; break; else echo "LXQt no funciona en este procesador (sin SSE2)."; fi ;;
@@ -612,8 +886,22 @@ setup_session_tracking() {
 # ------------------------------------------------------------------------------
 install_packages() {
     log_info "== Instalando $DESKTOP y los programas de uso general =="
-    # shellcheck disable=SC2046
-    apt_install $(desktop_pkgs "$DESKTOP")
+    # En varias tandas y no en una sola: con 1 GB de RAM, apt-get llego a
+    # usar casi 900 MB calculando los ~650 paquetes de una vez y el sistema
+    # lo cerro por falta de memoria (visto en un equipo de 32 bits).
+    case "$DESKTOP" in
+        LXDE) desk="$PKGS_LXDE" ;;
+        LXQT) desk="$PKGS_LXQT" ;;
+        FLUXBOX) desk="$PKGS_FLUXBOX" ;;
+    esac
+    # shellcheck disable=SC2086
+    apt_install $PKGS_BASE
+    # shellcheck disable=SC2086
+    apt_install $desk
+    # shellcheck disable=SC2086
+    apt_install $PKGS_APPS
+    # shellcheck disable=SC2086
+    apt_install $PKGS_YOUTUBE
 
     # Si algo arrastro otro gestor de inicio de sesion, se desactiva: dos
     # gestores a la vez pelean por la pantalla.
@@ -921,10 +1209,6 @@ BOOT
         log_warn "No se encontro /etc/runit/boot-run: zram y BFQ no se configuraron."
     fi
 
-    if is_installed earlyoom; then
-        ensure_runit_service earlyoom "/usr/bin/earlyoom -r 3600" no
-    fi
-
     # TRIM semanal solo si hay un SSD que lo acepte.
     ssd=""
     for q in /sys/block/*/queue; do
@@ -944,6 +1228,15 @@ BOOT
 # ------------------------------------------------------------------------------
 # 7. Autoarranque y configuracion de cada escritorio
 # ------------------------------------------------------------------------------
+# earlyoom se instala junto con los programas: su servicio se activa
+# despues de instalar.
+setup_earlyoom() {
+    [ "$TUNE" -eq 1 ] || return 0
+    if is_installed earlyoom; then
+        ensure_runit_service earlyoom "/usr/bin/earlyoom -r 3600" no
+    fi
+}
+
 write_fluxbox_files() {
     dir="$1"
     mkdir -p "$dir"
@@ -1337,19 +1630,45 @@ enable_display_manager() {
     ensure_runit_service lightdm "/usr/sbin/lightdm" yes
 }
 
+# Modo --limpiar (antiX Full): sin internet, solo quita y ajusta.
+main_clean() {
+    remove_other_inits
+    clean_antix_full
+    setup_tuning
+    # earlyoom no viene en la ISO: se instala solo si hay internet.
+    if [ "$TUNE" -eq 1 ] && ! is_installed earlyoom \
+       && timeout 60 apt-get install -y --no-install-recommends earlyoom >>"$LOG_FILE" 2>&1; then
+        log_ok "earlyoom instalado."
+    fi
+    setup_earlyoom
+    log_info "Registro completo: $LOG_FILE"
+    log_ok "Listo. Reinicia el equipo para terminar."
+}
+
 main() {
     parse_args "$@"
     check_environment
+    if [ "$DESKTOP" = "LIMPIAR" ]; then
+        main_clean
+        return 0
+    fi
     choose_fast_mirrors
     log_info "Actualizando indices de paquetes..."
     apt-get update >>"$LOG_FILE" 2>&1 || log_warn "apt-get update tuvo errores (detalle en $LOG_FILE)."
     choose_desktop
+    if [ "$DESKTOP" = "LIMPIAR" ]; then
+        main_clean
+        return 0
+    fi
     remove_other_inits
+    # zram antes de instalar: con 1 GB de RAM apt-get se puede quedar sin
+    # memoria.
+    setup_tuning
     setup_session_tracking
     install_packages
+    setup_earlyoom
     setup_network
     setup_services
-    setup_tuning
     setup_youtube
     setup_desktop_config
     setup_display_manager
