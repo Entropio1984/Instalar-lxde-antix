@@ -52,6 +52,34 @@ sudo ./antix-desktop-postinstall.sh --fluxbox
 sudo ./antix-desktop-postinstall.sh --lxqt
 ```
 
+## antiX Full: quedarse con IceWM y quitar lo que sobra
+
+Si instalaste **antiX Full** (la versión grande, de unos 2 GB), ya tienes casi todo, pero también muchas cosas que un usuario común no usa. En vez de descargar otro escritorio, el script puede dejar el **IceWM** que trae antiX y quitar lo que sobra. **No necesita internet**, porque quitar programas no descarga nada, y tarda unos 5 minutos.
+
+```
+sudo ./antix-desktop-postinstall.sh --limpiar
+```
+
+En antiX Full el menú del script también ofrece esta opción, ya marcada.
+
+**Se quita:**
+
+- Los otros escritorios: Fluxbox, JWM y herbstluftwm (y sus opciones en la pantalla de inicio de sesión).
+- Lo que solo sirve en el USB de instalación: el instalador, la creación de ISO y la persistencia.
+- Programas para usuarios avanzados: correo Claws Mail, chat (HexChat, irssi), FTP, Geany, Meld, CherryTree, DOSBox, Xine, WinFF, copias de seguridad, módem de acceso telefónico, MuPDF y LibreOffice Math, entre otros.
+- Efectos de sonido para músicos (EasyEffects y sus plugins).
+- Los idiomas que no son el del equipo ni el inglés: Firefox, LibreOffice y diccionarios en otros 18 idiomas, y `locales-all` (todos los idiomas del mundo).
+- Firmware de tarjetas de red de servidores y de celulares (nunca están en un portátil o PC).
+- Los compiladores y archivos de programación, salvo que el wifi sea Broadcom con el controlador `wl`, que los necesita.
+
+**Se queda:** IceWM, Firefox, LibreOffice (Writer, Calc, Impress y Draw), Evince para los PDF, Celluloid y mpv para videos y YouTube, XMMS para música, Mirage para fotos, Transmission, Xfburn para grabar discos, Synaptic, GParted, el Centro de Control de antiX, impresoras, escáner, wifi, bluetooth y el firmware de equipos comunes.
+
+En la prueba con antiX Full de 32 bits se retiraron unos 250 paquetes y se liberaron **unos 2 GB**. Además:
+
+- El menú queda sin accesos a programas que ya no existen, y el editor predeterminado pasa a ser Leafpad (el que se usaba era Geany).
+- La ayuda de antiX (Preguntas frecuentes y botones de "Ayuda") se abre con Firefox, en lugar de un visor que ocupaba unos 150 MB.
+- Retira los otros inits (solo queda runit) y aplica los [ajustes para equipos viejos](#ajustes-para-equipos-viejos), que antiX no trae. earlyoom solo se instala si hay internet, porque no viene en la ISO.
+
 ## Descargas más rápidas (espejos)
 
 antiX 26 viene configurado para descargar los paquetes de Debian desde Alemania. Desde América Latina eso hace que bajar el escritorio y los programas (casi 2 GB) tarde horas.
@@ -83,6 +111,8 @@ Son los mismos ajustes que usa Lázaro Linux, adaptados a antiX. El script los a
 | **Escritura en bloques pequeños** | Evita pausas largas al guardar en discos lentos o memorias USB. |
 | **TRIM semanal** (solo discos SSD) | Evita que un SSD se vuelva lento con el tiempo. |
 | **Páginas de memoria a pedido** (4 GB o menos) | Ahorra memoria. |
+
+zram se activa **antes** de instalar el escritorio. En un equipo de 32 bits con poca memoria, apt-get se quedó sin memoria al calcular los ~650 paquetes de una sola vez y el sistema lo cerró. Por eso ahora también instala en cuatro tandas: base, escritorio, programas y YouTube.
 
 Si no los quieres, usa `--sin-ajustes`. Para quitarlos después, borra `/etc/sysctl.d/90-antix-equipos-viejos.conf` y `/etc/runit/boot-run/S76-antix-equipos-viejos.stage1.sh`, y reinicia.
 
@@ -117,4 +147,4 @@ grep -qw sse2 /proc/cpuinfo && echo "Tiene SSE2" || echo "NO tiene SSE2"
 
 ## Prueba automática
 
-En cada cambio, GitHub descarga antiX 26.1 Core de 32 y de 64 bits, retira los otros inits como lo hace el script e instala los programas en cada escritorio. Así comprueba que todos los paquetes existen y caben en ambas versiones. No arranca el escritorio: eso se prueba a mano en una máquina virtual.
+En cada cambio, GitHub descarga antiX 26.1 Core de 32 y de 64 bits, retira los otros inits como lo hace el script e instala los programas en cada escritorio. Así comprueba que todos los paquetes existen y caben en ambas versiones. También descarga antiX 26.1 Full de 32 bits, lo configura en español de Colombia y hace la limpieza **sin red**. Luego comprueba que se quedó lo que debe quedar (IceWM, Firefox y LibreOffice en español, impresoras, wifi...), que se fue lo que sobra y que el menú no tiene accesos rotos. No arranca el escritorio: eso se prueba a mano en una máquina virtual.

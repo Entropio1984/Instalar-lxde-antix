@@ -4,6 +4,8 @@
 #      comprueba que runit sigue siendo el init y que no se borro nada mas;
 #   2. instala de verdad los paquetes de cada escritorio (LXDE, LXQt,
 #      Fluxbox) y muestra cuanto espacio ocupan.
+#   3. en antiX Full de 32 bits, la limpieza que deja IceWM (--limpiar),
+#      sin red.
 # No arranca el escritorio: eso se revisa a mano en una maquina virtual.
 name: Prueba en antiX 32 y 64 bits
 
@@ -181,3 +183,90 @@ jobs:
           sudo chroot /antix bash -c 'Xvfb :99 -screen 0 1024x768x24 >/dev/null 2>&1 & sleep 2; DISPLAY=:99 timeout 5 tint2 -c /etc/skel/.config/tint2/tint2rc >/tmp/tint2.log 2>&1; rc=$?; pkill Xvfb; echo "tint2 termino con $rc (124 = seguia funcionando)"; [ $rc = 124 ]'
           sudo grep -iE "unknown|invalid|error|warning" /antix/tmp/tint2.log || echo "tint2 no reporto problemas en su configuracion"
           echo "OK"
+
+  # antiX Full de 32 bits: la limpieza que deja IceWM (--limpiar). Corre
+  # SIN red (unshare -n) para demostrar que no descarga nada, con el
+  # sistema en espanol (es_CO), como lo instalaria una persona en Colombia.
+  antix-full:
+    name: antiX Full 386 + limpieza (IceWM, sin internet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Herramientas
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq squashfs-tools p7zip-full
+
+      - name: Guardar la ISO entre pruebas
+        uses: actions/cache@v4
+        with:
+          path: iso
+          key: antix-${{ env.ANTIX_VERSION }}-386-full
+
+      - name: Descargar antiX ${{ env.ANTIX_VERSION }} Full 386
+        run: |
+          mkdir -p iso
+          f="antiX-${ANTIX_VERSION}_386-full.iso"
+          if [ ! -s "iso/$f" ]; then
+            for intento in 1 2 3 4; do
+              curl -fsSL --retry 3 -o "iso/$f" \
+                "https://sourceforge.net/projects/antix-linux/files/Final/antiX-${ANTIX_VERSION}/$f/download" && break
+              sleep $((intento * 20))
+            done
+          fi
+          ls -la iso
+
+      - name: Abrir el sistema de antiX Full
+        run: |
+          7z e -y -o"$RUNNER_TEMP" "iso/antiX-${ANTIX_VERSION}_386-full.iso" antiX/linuxfs >/dev/null
+          sudo unsquashfs -q -d /antix "$RUNNER_TEMP/linuxfs"
+          rm -f "$RUNNER_TEMP/linuxfs"
+          for d in proc sys dev dev/pts; do sudo mount --bind /$d /antix/$d; done
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /antix/usr/sbin/policy-rc.d >/dev/null
+          sudo chmod 755 /antix/usr/sbin/policy-rc.d
+          sudo cp antix-desktop-postinstall.sh /antix/root/
+          # Sistema instalado en espanol de Colombia.
+          echo 'LANG=es_CO.UTF-8' | sudo tee /antix/etc/default/locale
+          sudo chroot /antix dpkg-query -W -f='${Package} ${Status}\n' | awk '$NF=="installed"{print $1}' | sort > antes.txt
+          echo "Paquetes antes: $(wc -l < antes.txt)"
+
+      - name: Limpiar (sin red)
+        run: |
+          inicio=$(date +%s)
+          sudo unshare -n chroot /antix env ANTIX_SOLO_FUNCIONES=1 bash -c \
+            '. /root/antix-desktop-postinstall.sh; LOG_FILE=/tmp/limpiar.log; remove_other_inits; clean_antix_full'
+          echo "Tardo $(( ($(date +%s) - inicio) / 60 )) min."
+          echo "--- Registro:"; sudo cat /antix/tmp/limpiar.log | grep -E '^\S+ \S+ \[' || true
+
+      - name: Comprobar lo que quedo
+        run: |
+          sudo chroot /antix dpkg-query -W -f='${Package} ${Status}\n' | awk '$NF=="installed"{print $1}' | sort > despues.txt
+          error=0
+          for p in icewm desktop-defaults-icewm-antix desktop-session-antix zzzfm rox-filer roxterm-gtk2 \
+                   firefox-esr firefox-esr-l10n-es-es libreoffice-writer libreoffice-calc libreoffice-impress \
+                   libreoffice-l10n-es hunspell-es evince celluloid mpv xmms mirage leafpad transmission-gtk \
+                   xfburn control-centre-antix connman cmst ceni slimski cups simple-scan blueman synaptic \
+                   gparted packageinstaller antix-memory-manager runit-init-antix locales \
+                   firmware-iwlwifi firmware-atheros firmware-realtek firmware-misc-nonfree; do
+            if ! grep -qx "$p" despues.txt; then echo "::error::Se perdio $p"; error=1; fi
+          done
+          for p in fluxbox jwm herbstluftwm claws-mail hexchat geany dosbox antix-installer locales-all \
+                   firefox-esr-l10n-de libreoffice-l10n-fr firmware-netronome gcc; do
+            if grep -qx "$p" despues.txt; then echo "::error::Sigue instalado $p"; error=1; fi
+          done
+          if ! sudo chroot /antix locale -a | grep -qi '^es_CO.utf-\?8$'; then echo "::error::No quedo el idioma es_CO"; error=1; fi
+          sudo chroot /antix dpkg --audit && echo "dpkg --audit: sin problemas"
+          sudo chroot /antix apt-get check -q || error=1
+          rotos="$(sudo chroot /antix sh -c 'for f in /usr/share/applications/*.desktop; do [ -e "$f" ] || echo "$f"; done')"
+          if [ -n "$rotos" ]; then echo "::error::Accesos del menu rotos: $rotos"; error=1; fi
+          ls /antix/usr/share/xsessions
+          if ls /antix/usr/share/xsessions | grep -qiE 'fluxbox|jwm|herbstluft'; then echo "::error::Quedan sesiones de otros escritorios"; error=1; fi
+          sudo chroot /antix firefox-esr --version || error=1
+          sudo chroot /antix sh -c 'command -v antix-viewer && command -v icewm'
+          quitados="$(comm -23 antes.txt despues.txt | wc -l)"
+          {
+            echo "### antiX Full 386: limpieza con IceWM (sin internet)"
+            echo "- Paquetes: $(wc -l < antes.txt) antes, $(wc -l < despues.txt) despues ($quitados retirados)."
+            sudo grep -E '\[(OK|WARN)\]' /antix/tmp/limpiar.log | sed 's/^/- /'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "--- Retirados:"; comm -23 antes.txt despues.txt | tr '\n' ' '; echo
+          exit $error
